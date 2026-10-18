@@ -57,6 +57,11 @@ def log(msg):
     line = '[%s] %s' % (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg)
     try:
         os.makedirs(APP_DIR, exist_ok=True)
+        try:
+            if os.path.getsize(LOG_FILE) > 5 * 1024 * 1024:
+                os.replace(LOG_FILE, LOG_FILE + '.1')
+        except Exception:
+            pass
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(line + '\n')
     except Exception:
@@ -96,7 +101,52 @@ DENY = [
     (r'\bTakeown\b[^\n]*[Cc]:\\Windows', '夺取系统目录所有权'),
     (r'\bSet-MpPreference\b', '改动杀毒设置'),
     (r'\bDisable-BitLocker\b', '关闭磁盘加密'),
+    # ↓ 实测出来的漏网之鱼（黑名单永远补不全，真正兜底的是下面的白名单）
+    (r'\bRemove-Item\b', '删除文件/目录'),
+    (_START + r'(rd|rmdir|del)\b', '删除文件/目录'),
+    (r'\bnet\s+localgroup\b', '改动用户组'),
+    (r'\bSet-ExecutionPolicy\b', '改动脚本执行策略'),
+    (r'\b(schtasks|at)\s+', '创建计划任务'),
+    (r'\b(Stop-Process|taskkill)\b', '结束进程'),
+    (r'\breg\s+(add|delete)\b', '改动注册表'),
+    (r'\b(New-LocalUser|Add-LocalGroupMember|Enable-LocalUser)\b', '改动本地账号'),
+    (r'\bStop-Service\b', '停止系统服务'),
 ]
+
+# ---- 安全闸门：默认只读 ----
+SAFE_MODE = True
+_READ_VERBS = {
+    'get', 'select', 'measure', 'sort', 'format', 'out', 'convertto', 'convertfrom',
+    'resolve', 'test', 'where', 'foreach', 'compare', 'group', 'join', 'split', 'tee',
+    'dir', 'ls', 'cat', 'type', 'more', 'findstr', 'tree', 'help', 'man',
+    'tasklist', 'ipconfig', 'ping', 'tracert', 'nslookup', 'netstat', 'arp',
+    'systeminfo', 'whoami', 'hostname', 'ver', 'echo',
+}
+FAIL_LOCK = {'n': 0, 'until': 0.0}
+
+
+def gate(cmd):
+    '''返回 (允许, 拒绝原因)。
+    第一道：DENY 黑名单永远生效，与安全模式开关无关。
+    第二道：安全模式下，每条子语句的动词必须落在只读白名单里。
+    '''
+    for pat, why in DENY:
+        if re.search(pat, cmd, re.IGNORECASE):
+            return False, ('⛔ 已拦截（%s）：这条命令属于高危操作，远程通道不允许执行。\n'
+                           '   确实需要的话，请到电脑上手工执行。' % why)
+    if not SAFE_MODE:
+        return True, ''
+    for seg in re.split(r'[;|\n]', cmd):
+        if not seg.strip():
+            continue
+        m = re.match(r'\s*([A-Za-z_][\w\-]*)', seg)
+        w = m.group(1).lower() if m else ''
+        base = w.split('-')[0] if '-' in w else w
+        if w in _READ_VERBS or base in _READ_VERBS:
+            continue
+        return False, ('⛔ 安全模式下只允许只读命令（「%s」不在白名单里）。\n'
+                       '   要执行写操作，请在电脑端窗口里取消勾选「安全模式」。' % (w or '空'))
+    return True, ''
 
 _state_lock = threading.Lock()
 
@@ -132,7 +182,7 @@ def get_token():
         t = open(TOKEN_FILE, encoding='utf-8').read().strip()
         if t:
             return t
-    t = secrets.token_hex(8)
+    t = secrets.token_hex(16)   # 32 位 hex（只对新生效，老令牌保留以免手机书签失效）
     with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
         f.write(t)
     return t
@@ -168,9 +218,10 @@ SHELL, LEGACY = find_shell()
 
 
 def run_ps(cmd):
-    for pat, why in DENY:
-        if re.search(pat, cmd, re.IGNORECASE):
-            return False, '⛔ 已拦截（%s）：这条命令属于高危操作，远程通道不允许执行。' % why
+    allowed, why = gate(cmd)
+    if not allowed:
+        log('BLOCK: %s' % cmd[:120])
+        return False, why
     if SHELL is None:
         return False, '找不到 PowerShell 可执行文件'
     real = cmd
@@ -273,6 +324,13 @@ hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 
 <script>
 const K = new URLSearchParams(location.search).get('k') || '';
+// 首次带 ?k= 进来后：令牌存成 Cookie，并把地址栏里的令牌抹掉（避免留在浏览历史里）
+if (K) {
+  try {
+    document.cookie = 'k=' + encodeURIComponent(K) + ';path=/;max-age=2592000;SameSite=Lax';
+    history.replaceState(null, '', location.pathname);
+  } catch (e) {}
+}
 const q = s => document.querySelector(s);
 function fill(t){ q('#cmd').value = t; }
 function clr(){ q('#out').textContent='—'; }
@@ -409,7 +467,28 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def _auth(self, qs):
-        return qs.get('k', [''])[0] == TOKEN
+        now = time.time()
+        with _state_lock:
+            if FAIL_LOCK['until'] > now:
+                return False
+        ok = qs.get('k', [''])[0] == TOKEN
+        if not ok:
+            cookie = self.headers.get('Cookie') or ''
+            for part in cookie.split(';'):
+                name, _, val = part.strip().partition('=')
+                if name.strip() == 'k' and val.strip() == TOKEN:
+                    ok = True
+                    break
+        with _state_lock:
+            if ok:
+                FAIL_LOCK['n'] = 0
+            else:
+                FAIL_LOCK['n'] += 1
+                if FAIL_LOCK['n'] >= 5:
+                    FAIL_LOCK['until'] = now + 600
+                    FAIL_LOCK['n'] = 0
+                    log('AUTH: 连续失败 5 次，锁定 10 分钟')
+        return ok
 
     def _body(self):
         n = int(self.headers.get('Content-Length') or 0)
@@ -447,7 +526,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                 q.append(json.loads(line))
                             except Exception:
                                 pass
-            self._json({'queue': q, 'history': h})
+            self._json({'queue': q, 'history': h, 'safe': SAFE_MODE})
             return
         if u.path == '/files':
             target = qs.get('p', [''])[0] or SHARE_DIR
@@ -714,7 +793,7 @@ def gui(srv):
 
     root = tk.Tk()
     root.title('手机远程控制台')
-    root.geometry('560x470')
+    root.geometry('560x790')
     root.resizable(False, False)
     try:
         root.iconbitmap(default='')
@@ -764,6 +843,40 @@ def gui(srv):
         messagebox.showinfo('开机自启', '已开启：开机自动启动' if ok else '已关闭：不再开机启动')
 
     tk.Checkbutton(frm, text='开机自动启动', variable=var, command=toggle_auto).pack(anchor='w', pady=(12, 0))
+
+    safevar = tk.IntVar(value=1 if SAFE_MODE else 0)
+
+    def toggle_safe():
+        global SAFE_MODE
+        SAFE_MODE = bool(safevar.get())
+        messagebox.showinfo('安全模式',
+                            '已开启：手机上只能执行只读命令（推荐）' if SAFE_MODE else
+                            '已关闭：手机上可以执行写操作。\n只在你自己信任的网络下这样做。')
+
+    tk.Checkbutton(frm, text='安全模式（只允许只读命令，推荐开启）',
+                   variable=safevar, command=toggle_safe).pack(anchor='w', pady=(6, 0))
+
+    try:
+        import qrcode
+        _q = qrcode.QRCode(box_size=6, border=2)
+        _q.add_data(lan_url)
+        _q.make(fit=True)
+        _mat = _q.get_matrix()
+        _n = len(_mat)
+        _side = 190
+        _cv = tk.Canvas(root, width=_side, height=_side, bg='white',
+                        highlightthickness=1, highlightbackground='#ddd')
+        _cv.pack(pady=(10, 2))
+        _cell = _side / float(_n)
+        for _r, _row in enumerate(_mat):
+            for _c, _dark in enumerate(_row):
+                if _dark:
+                    _cv.create_rectangle(_c * _cell, _r * _cell, (_c + 1) * _cell,
+                                         (_r + 1) * _cell, fill='black', outline='black')
+        tk.Label(root, text='手机相机扫这个二维码，直接打开控制台',
+                 fg='#666', font=('Microsoft YaHei', 9)).pack()
+    except Exception:
+        pass
 
     status = tk.Label(root, text='● 运行中   端口 %d   数据目录 %s' % (PORT, APP_DIR),
                       fg='#1a7f37', font=('Microsoft YaHei', 9), wraplength=520, justify='left')
