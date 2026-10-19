@@ -216,6 +216,7 @@ class FileStation {
   start() {
     for (const dir of [this.dataDir, this.uploadDir, this.shareDir]) fs.mkdirSync(dir, { recursive: true });
     this.migrateLegacy();
+    this.migrateQueueToInbox();
     this.loadToken();
     this.loadExtraDirs();
     try { fs.writeFileSync(this.notifyScript, NOTIFY_PS, 'ascii'); } catch { /* ignore */ }
@@ -518,7 +519,7 @@ class FileStation {
     return out.slice(-limit);
   }
 
-  // ---------- 收件箱：手机发来的文字默认只存这里，面板里直接显示 ----------
+  // ---------- 对话流：手机和电脑双向消息（文字 / 留言），面板与手机页共用 ----------
 
   stamp() {
     const d = new Date();
@@ -527,8 +528,14 @@ class FileStation {
       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
-  inboxAppend(text, saved) {
-    const entry = { t: this.stamp(), text: String(text), saved: !!saved };
+  inboxAppend(text, saved, meta = {}) {
+    const entry = {
+      t: this.stamp(),
+      from: meta.from === 'pc' ? 'pc' : 'phone',
+      kind: meta.kind === 'msg' ? 'msg' : 'text',
+      text: String(text),
+      saved: !!saved,
+    };
     try {
       fs.appendFileSync(this.inboxFile, JSON.stringify(entry) + '\n', 'utf8');
       const raw = fs.readFileSync(this.inboxFile, 'utf8');
@@ -542,6 +549,36 @@ class FileStation {
     return entry;
   }
 
+  /** 把老的 留言.jsonl 并进对话流（只做一次），历史留言不会丢。 */
+  migrateQueueToInbox() {
+    try {
+      if (!fs.existsSync(this.queueFile)) return;
+      const raw = fs.readFileSync(this.queueFile, 'utf8');
+      const lines = raw.split(/\r?\n/).filter((line) => line.trim());
+      if (lines.length) {
+        const out = [];
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (!obj || typeof obj.text !== 'string') continue;
+            out.push(JSON.stringify({
+              t: String(obj.t || this.stamp()),
+              from: 'phone',
+              kind: 'msg',
+              text: obj.text,
+              saved: false,
+            }));
+          } catch { /* 跳过坏行 */ }
+        }
+        if (out.length) fs.appendFileSync(this.inboxFile, out.join('\n') + '\n', 'utf8');
+      }
+      fs.renameSync(this.queueFile, this.queueFile + '.migrated');
+      this.log('MIGRATE: 留言.jsonl 已并入对话流（' + lines.length + ' 条）');
+    } catch (err) {
+      this.log('MIGRATE-QUEUE-ERR: ' + String(err && err.message || err));
+    }
+  }
+
   inboxList(limit = 30) {
     const out = [];
     let raw = '';
@@ -551,7 +588,15 @@ class FileStation {
       if (!trimmed) continue;
       try {
         const obj = JSON.parse(trimmed);
-        if (obj && typeof obj.text === 'string') out.push({ t: String(obj.t || ''), text: obj.text, saved: !!obj.saved });
+        if (obj && typeof obj.text === 'string') {
+          out.push({
+            t: String(obj.t || ''),
+            text: obj.text,
+            saved: !!obj.saved,
+            from: obj.from === 'pc' ? 'pc' : 'phone',
+            kind: obj.kind === 'msg' ? 'msg' : 'text',
+          });
+        }
       } catch { /* 跳过坏行 */ }
     }
     return out.slice(-limit).reverse();
@@ -861,25 +906,30 @@ class FileStation {
     if (!body) return this.safeJson(res, 413, { ok: false, error: '文本超过 200 KB 上限' });
     let text = '';
     let saveFile = false;
+    let notifyPc = false;
     const type = String(req.headers['content-type'] || '').toLowerCase();
     if (type.includes('application/json')) {
       try {
         const payload = JSON.parse(body.toString('utf8')) || {};
         text = String(payload.text || '');
         saveFile = payload.save === true || payload.save === 1 || payload.save === '1' || payload.save === 'true';
+        notifyPc = payload.notify === true || payload.notify === 1 || payload.notify === '1' || payload.notify === 'true';
       } catch { text = ''; }
     } else if (type.includes('x-www-form-urlencoded')) {
       const params = new URLSearchParams(body.toString('utf8'));
       text = params.get('text') || '';
       const flag = String(params.get('save') || '').toLowerCase();
       saveFile = flag === '1' || flag === 'true' || flag === 'on';
+      const ping = String(params.get('notify') || '').toLowerCase();
+      notifyPc = ping === '1' || ping === 'true' || ping === 'on';
     } else {
       text = body.toString('utf8').replace(/^\uFEFF/, '');
     }
     if (!text.trim()) return this.safeJson(res, 200, { ok: false, error: '内容为空' });
     const bytes = Buffer.from(text, 'utf8');
-    // 先落收件箱：面板「手机发来的文字」直接显示内容，这是默认行为，不生成文件。
-    const entry = this.inboxAppend(text, saveFile);
+    // 进对话流：面板直接显示，默认不生成文件；勾选「存 txt」才额外写文件。
+    const entry = this.inboxAppend(text, saveFile, { from: 'phone', kind: notifyPc ? 'msg' : 'text' });
+    if (notifyPc) this.notify(text);
     if (!saveFile) {
       this.log('文字(收件箱) ' + bytes.length + ' B');
       return this.safeJson(res, 200, { ok: true, saved: false, t: entry.t, bytes: bytes.length });
@@ -910,6 +960,7 @@ class FileStation {
     const t = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' +
       pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
     fs.appendFileSync(this.queueFile, JSON.stringify({ t, text }) + '\n', 'utf8');
+    this.inboxAppend(text, false, { from: 'phone', kind: 'msg' });
     this.log('留言: ' + text.slice(0, 80));
     this.notify(text);
     return this.safeJson(res, 200, { ok: true, t });
@@ -1106,6 +1157,17 @@ class FileStation {
       case 'clear-inbox': {
         try { fs.writeFileSync(this.inboxFile, '', 'utf8'); } catch { /* ignore */ }
         return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
+      }
+      case 'send-to-phone': {
+        const text = String(payload.text || '').trim();
+        if (!text) return this.safeJson(res, 200, { ok: false, error: '内容为空' });
+        const limited = text.slice(0, 20000);
+        const entry = this.inboxAppend(limited, false, {
+          from: 'pc',
+          kind: payload.notify ? 'msg' : 'text',
+        });
+        this.log('发到手机 ' + limited.length + ' B');
+        return this.safeJson(res, 200, { ok: true, t: entry.t, status: this.statusPayload() });
       }
       default:
         return this.safeJson(res, 400, { ok: false, error: '未知操作' });

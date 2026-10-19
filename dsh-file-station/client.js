@@ -42,14 +42,20 @@ window.__ModuleLoader__.load({
         recentTexts: '共享文件夹里的文字',
         messages: '手机留言',
         clearQueue: '清空留言',
-        inboxTitle: '手机发来的文字',
-        inboxHint: '手机点「发送到电脑」后，内容直接显示在这里，默认不生成 txt 文件；需要存档时在手机上勾选「同时存成 txt 文件」。',
-        inboxEmpty: '还没有收到文字',
+        inboxTitle: '和手机的对话',
+        inboxHint: '手机发来的文字和留言都显示在这里；在下面输入框写一句，点「发送」就发到手机。',
+        inboxEmpty: '还没有消息',
         inboxSaved: '已存文件',
-        clearInbox: '清空文字',
-        inboxCleared: '文字已清空',
+        clearInbox: '清空对话',
+        inboxCleared: '对话已清空',
         copyMsg: '复制',
         copiedMsg: '已复制',
+        fromPhone: '手机',
+        fromPc: '电脑',
+        sendPlaceholder: '写一句发到手机…',
+        sendToPhone: '发送',
+        sentToPhone: '已发到手机',
+        needText: '先写点内容',
         empty: '暂时没有内容',
         settings: '额外共享目录',
         settingsHint: '把电脑上其他文件夹加进来，手机就能浏览和下载（也可以把文件上传到共享目录）。',
@@ -96,14 +102,20 @@ window.__ModuleLoader__.load({
         recentTexts: 'Text files in the shared folder',
         messages: 'Messages from phone',
         clearQueue: 'Clear messages',
-        inboxTitle: 'Text sent from the phone',
-        inboxHint: 'Text sent from the phone appears here directly — no txt file is written unless the phone opts in.',
-        inboxEmpty: 'No text yet',
+        inboxTitle: 'Conversation with the phone',
+        inboxHint: 'Text and messages from the phone appear here; type below and press Send to push text to the phone.',
+        inboxEmpty: 'No messages yet',
         inboxSaved: 'saved to file',
-        clearInbox: 'Clear text',
-        inboxCleared: 'Text cleared',
+        clearInbox: 'Clear conversation',
+        inboxCleared: 'Conversation cleared',
         copyMsg: 'Copy',
         copiedMsg: 'Copied',
+        fromPhone: 'Phone',
+        fromPc: 'Computer',
+        sendPlaceholder: 'Write something to the phone…',
+        sendToPhone: 'Send',
+        sentToPhone: 'Sent to the phone',
+        needText: 'Type something first',
         empty: 'Nothing here yet',
         settings: 'Extra shared folders',
         settingsHint: 'Add other folders on this computer so the phone can browse and download them.',
@@ -192,7 +204,9 @@ window.__ModuleLoader__.load({
 .fs-msg .b { white-space: pre-wrap; word-break: break-word; }
 .fs-bubbles { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .fs-bubble { border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; padding: 8px 10px;
-  background: var(--dsw-alias-bg-layer-2); }
+  background: var(--dsw-alias-bg-layer-2); max-width: 86%; }
+.fs-bubble.pc { margin-right: auto; }
+.fs-bubble.me { margin-left: auto; background: var(--dsw-alias-bg-base); border-color: var(--dsw-alias-border-l2); }
 .fs-bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .fs-bubble-head .ts { font-size: 12px; color: var(--dsw-alias-label-secondary);
   font-variant-numeric: tabular-nums; }
@@ -307,6 +321,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState('');
       const [toast, setToast] = useState(null);
       const [dirInput, setDirInput] = useState('');
+      const [draft, setDraft] = useState('');
       const toastTimer = useRef(0);
 
       const say = useCallback((text, ok = true) => {
@@ -357,6 +372,7 @@ window.__ModuleLoader__.load({
             else if (action === 'set-share-dirs') say(t('dirsUpdated'));
             else if (action === 'clear-queue') say(t('cleared'));
             else if (action === 'clear-inbox') say(t('inboxCleared'));
+            else if (action === 'send-to-phone') say(t('sentToPhone'));
           } else say((data && data.error) || t('netError'), false);
         } catch {
           say(t('netError'), false);
@@ -405,6 +421,13 @@ window.__ModuleLoader__.load({
         }
       }, [say, t]);
 
+      const sendToPhone = useCallback(() => {
+        const text = draft.trim();
+        if (!text) { say(t('needText'), false); return; }
+        setDraft('');
+        act('send-to-phone', { text });
+      }, [draft, act, say, t]);
+
       const addDir = useCallback(() => {
         const next = dirInput.trim();
         if (!next) return;
@@ -427,7 +450,6 @@ window.__ModuleLoader__.load({
       }
 
       const running = status.running;
-      const messages = (status.queue || []).slice().reverse();
       const extras = status.extraDirs || [];
       const uploads = status.uploads || [];
       const texts = status.texts || [];
@@ -513,7 +535,7 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'm' }, fmtSize(it.sz) + ' · ' + fmtTime(it.mtime)))))
                 : h('div', { className: 'fs-empty' }, t('empty')))),
 
-          // 手机发来的文字（默认只在这里显示，不落文件）
+          // 和手机的对话（文字 / 留言，双向）
           h('div', { className: 'fs-card' },
             h('div', { className: 'fs-card-head' },
               h('div', { className: 'fs-card-title' }, t('inboxTitle') + (inbox.length ? ' (' + inbox.length + ')' : '')),
@@ -522,26 +544,25 @@ window.__ModuleLoader__.load({
                 : null),
             h('div', { className: 'fs-hint' }, t('inboxHint')),
             inbox.length
-              ? h('div', { className: 'fs-bubbles' }, inbox.map((m, i) => h('div', { className: 'fs-bubble', key: i },
+              ? h('div', { className: 'fs-bubbles' }, inbox.map((m, i) => h('div', { className: 'fs-bubble' + (m.from === 'pc' ? ' pc' : ' me'), key: i },
                   h('div', { className: 'fs-bubble-head' },
-                    h('span', { className: 'ts' }, m.t || ''),
+                    h('span', { className: 'ts' },
+                      (m.from === 'pc' ? t('fromPc') : t('fromPhone'))
+                      + (m.t ? ' · ' + m.t : '')
+                      + (m.kind === 'msg' ? ' · 💬' : '')),
                     m.saved ? h('span', { className: 'badge' }, t('inboxSaved')) : null,
                     h('button', { type: 'button', className: 'copy', onClick: () => copyText(m.text) }, t('copyMsg'))),
                   h('div', { className: 'b' }, m.text))))
-              : h('div', { className: 'fs-empty' }, t('inboxEmpty'))),
-
-          // 手机留言
-          h('div', { className: 'fs-card' },
-            h('div', { className: 'fs-card-head' },
-              h('div', { className: 'fs-card-title' }, t('messages') + (status.messages ? ' (' + status.messages + ')' : '')),
-              messages.length
-                ? h(Btn, { onClick: () => act('clear-queue'), danger: true, disabled: busy === 'clear-queue' }, t('clearQueue'))
-                : null),
-            messages.length
-              ? h('div', null, messages.map((m, i) => h('div', { className: 'fs-msg', key: i },
-                h('span', { className: 't' }, m.t),
-                h('span', { className: 'b' }, m.text))))
-              : h('div', { className: 'fs-empty' }, t('empty'))),
+              : h('div', { className: 'fs-empty' }, t('inboxEmpty')),
+            h('div', { className: 'fs-inputrow', style: { marginTop: 12 } },
+              h('input', {
+                className: 'fs-input',
+                value: draft,
+                placeholder: t('sendPlaceholder'),
+                onChange: (e) => setDraft(e.target.value),
+                onKeyDown: (e) => { if (e.key === 'Enter') sendToPhone(); },
+              }),
+              h(Btn, { primary: true, onClick: sendToPhone, disabled: !draft.trim() || busy === 'send-to-phone' }, t('sendToPhone')))),
 
           // 额外共享目录
           h('div', { className: 'fs-card' },

@@ -40,6 +40,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   .sent{padding:7px 0;border-top:1px solid #242a34;font-size:13px;white-space:pre-wrap;word-break:break-word}
   .sent .t{color:#98a0ad;font-size:12px;margin-right:6px}
   .sent .badge{color:#7ee2a8;font-size:11px;margin-left:6px}
+  #l-chat{max-height:320px;overflow:auto;gap:8px}
+  .chat{max-width:88%;padding:8px 10px;border-radius:12px;border:1px solid #242a34;background:#171b22}
+  .chat.me{margin-left:auto;background:#1b2740;border-color:#2c4373}
+  .chat.pc{margin-right:auto;background:#171b22}
+  .chat .ct{font-size:11px;color:#98a0ad;margin-bottom:3px}
+  .chat .cb{font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:#e6e9ee}
   .status.ok{color:#56d364}
   pre{white-space:pre-wrap;word-break:break-word;background:#0f1319;border:1px solid #2f3a49;
       border-radius:10px;padding:10px;max-height:46vh;overflow:auto;font-size:13px;margin:10px 0 0}
@@ -66,10 +72,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 </div>
 
 <div class="card">
-  <h2>📝 发一段文字到电脑</h2>
-  <textarea id="t-send" placeholder="写完点发送：内容会直接出现在电脑面板的「手机发来的文字」里"></textarea>
+  <h2>💬 和电脑对话</h2>
+  <div class="list" id="l-chat"></div>
+  <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
   <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
-  <div class="row" style="margin-top:8px"><button class="primary" id="b-txt">发送到电脑</button><span class="muted" id="s-txt"></span></div>
+  <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
+  <div class="row" style="margin-top:8px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
   <div class="list" id="l-sent"></div>
 </div>
 
@@ -91,13 +99,6 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     <button id="b-copy" style="display:none">📋 复制全文</button>
     <span class="muted" id="s-text"></span>
   </div>
-</div>
-
-<div class="card">
-  <h2>💬 留言到电脑</h2>
-  <textarea id="t-msg" placeholder="电脑上会弹出提醒"></textarea>
-  <div class="row" style="margin-top:8px"><button class="primary" id="b-msg">发送留言</button><span class="muted" id="s-msg"></span></div>
-  <div class="list" id="l-msgs"></div>
 </div>
 
 <script>
@@ -204,44 +205,52 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     next();
   };
 
-  // ---- 发文字 ----
-  // 默认只进电脑面板的收件箱（不落文件）；勾选「同时存成 txt 文件」才额外写 txt。
-  var sentLog = [];
-  function renderSent() {
-    var box = $('l-sent');
+  // ---- 对话（文字 / 留言，双向） ----
+  // 默认只进对话流，不落文件；勾选「存成 txt」才额外写文件，勾选「弹窗提醒」让电脑响铃弹窗。
+  var chat = [];
+  function renderChat() {
+    var box = $('l-chat');
     if (!box) return;
     box.textContent = '';
-    sentLog.slice(-6).reverse().forEach(function (it) {
+    // 新消息在下，像聊天软件一样往上滚
+    chat.slice(-30).forEach(function (it) {
       var d = document.createElement('div');
-      d.className = 'sent';
-      var t = document.createElement('span'); t.className = 't'; t.textContent = it.t || '';
-      d.appendChild(t);
-      d.appendChild(document.createTextNode(it.text || ''));
-      if (it.saved) {
-        var b = document.createElement('span'); b.className = 'badge'; b.textContent = '[已存文件]';
-        d.appendChild(b);
-      }
+      d.className = 'chat ' + (it.from === 'pc' ? 'pc' : 'me');
+      var head = document.createElement('div');
+      head.className = 'ct';
+      head.textContent = (it.from === 'pc' ? '电脑' : '我') + (it.t ? ' · ' + it.t : '') + (it.kind === 'msg' ? ' · 提醒' : '');
+      var body = document.createElement('div');
+      body.className = 'cb';
+      body.textContent = it.text || '';
+      d.appendChild(head);
+      d.appendChild(body);
       box.appendChild(d);
     });
+    box.scrollTop = box.scrollHeight;
   }
-  function loadSent() {
-    fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
-      if (r && r.ok && r.items) { sentLog = r.items.slice().reverse(); renderSent(); }
+  function loadChat() {
+    return fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
+      if (r && r.ok && r.items) {
+        // 接口返回新→旧，这里转成旧→新
+        chat = r.items.slice().reverse();
+        renderChat();
+      }
     }).catch(function () {});
   }
   $('b-txt').onclick = function () {
     var text = $('t-send').value;
     if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }
     var save = !!($('c-save') && $('c-save').checked);
+    var notify = !!($('c-notify') && $('c-notify').checked);
     var b = $('b-txt'); b.disabled = true;
-    api('/text', { text: text, save: save }).then(function (r) {
+    api('/text', { text: text, save: save, notify: notify }).then(function (r) {
       if (r.ok) {
-        set('s-txt', r.saved ? ('已保存：' + r.name + '（' + fmt(r.bytes) + '）') : '已发送到电脑面板（未生成文件）', 'ok');
-        sentLog.push({ t: r.t || '', text: text, saved: !!r.saved });
-        renderSent();
+        set('s-txt', r.saved ? ('已保存：' + r.name + '（' + fmt(r.bytes) + '）') : '已发送（未生成文件）', 'ok');
         $('t-send').value = '';
         if (r.saved) loadTexts();
-      } else set('s-txt', r.error || '发送失败', 'err');
+        return loadChat();
+      }
+      set('s-txt', r.error || '发送失败', 'err');
     }).catch(function (e) { set('s-txt', String(e), 'err'); })
       .then(function () { b.disabled = false; });
   };
@@ -345,34 +354,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     }
   };
 
-  // ---- 留言 ----
-  $('b-msg').onclick = function () {
-    var text = $('t-msg').value;
-    if (!text.trim()) { set('s-msg', '内容为空', 'err'); return; }
-    var b = $('b-msg'); b.disabled = true;
-    api('/queue', { text: text }).then(function (r) {
-      if (r.ok) { set('s-msg', '已发送', 'ok'); $('t-msg').value = ''; loadQueue(); }
-      else set('s-msg', r.error || '发送失败', 'err');
-    }).catch(function (e) { set('s-msg', String(e), 'err'); })
-      .then(function () { b.disabled = false; });
-  };
-  function loadQueue() {
-    fetch('/state' + qs()).then(function (r) { return r.json(); }).then(function (r) {
-      var list = $('l-msgs'); list.textContent = '';
-      (r.queue || []).slice().reverse().slice(0, 10).forEach(function (m) {
-        var d = document.createElement('div'); d.className = 'msg';
-        var t = document.createElement('span'); t.className = 't'; t.textContent = '[' + m.t + ']';
-        d.appendChild(t); d.appendChild(document.createTextNode(m.text || ''));
-        list.appendChild(d);
-      });
-    }).catch(function () {});
-  }
-
   loadFiles('');
   loadTexts();
-  loadSent();
-  loadQueue();
-  setInterval(function () { loadQueue(); }, 5000);
+  loadChat();
+  setInterval(function () { loadChat(); }, 4000);
 })();
 </script>
 </body>
