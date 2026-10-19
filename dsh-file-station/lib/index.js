@@ -27,6 +27,9 @@ const MAX_QUEUE_BODY = 64 * 1024;
 const TEXTS_LIMIT = 30;
 const LOG_MAX = 5 * 1024 * 1024;
 const FREE_MARGIN = 200 * 1024 * 1024;
+/** 手机发来的文字默认只进「收件箱」（面板里直接显示），不落 txt；收件箱保留最近 N 条。 */
+const INBOX_KEEP = 500;
+const INBOX_TRIM_AT = 800;
 
 /** 插件根目录（lib/index.js 的上一级），用于把默认数据目录固定在 D 盘插件目录下。 */
 const PLUGIN_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -167,6 +170,11 @@ export function apply(ctx, config = {}) {
       path: '/file-station/api/qr.svg',
       handler: (req, res) => station.handleGui(req, res, 'qr'),
     }));
+    disposers.push(ctx.webServer.register({
+      kind: 'exact',
+      path: '/file-station/api/inbox',
+      handler: (req, res) => station.handleGui(req, res, 'inbox'),
+    }));
     return () => {
       for (const dispose of disposers.reverse()) {
         try { dispose(); } catch { /* ignore */ }
@@ -187,6 +195,7 @@ class FileStation {
     this.shareDir = path.join(dataDir, '共享');
     this.tokenFile = path.join(dataDir, '_token.txt');
     this.queueFile = path.join(dataDir, '留言.jsonl');
+    this.inboxFile = path.join(dataDir, '收件箱.jsonl');
     this.extraFile = path.join(dataDir, '额外共享目录.txt');
     this.logFile = path.join(dataDir, 'remote.log');
     this.shotFile = path.join(dataDir, 'shot.png');
@@ -509,6 +518,51 @@ class FileStation {
     return out.slice(-limit);
   }
 
+  // ---------- 收件箱：手机发来的文字默认只存这里，面板里直接显示 ----------
+
+  stamp() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  inboxAppend(text, saved) {
+    const entry = { t: this.stamp(), text: String(text), saved: !!saved };
+    try {
+      fs.appendFileSync(this.inboxFile, JSON.stringify(entry) + '\n', 'utf8');
+      const raw = fs.readFileSync(this.inboxFile, 'utf8');
+      const lines = raw.split(/\r?\n/).filter((line) => line.trim());
+      if (lines.length > INBOX_TRIM_AT) {
+        fs.writeFileSync(this.inboxFile, lines.slice(-INBOX_KEEP).join('\n') + '\n', 'utf8');
+      }
+    } catch (err) {
+      this.log('INBOX-ERR: ' + String(err && err.message || err));
+    }
+    return entry;
+  }
+
+  inboxList(limit = 30) {
+    const out = [];
+    let raw = '';
+    try { raw = fs.readFileSync(this.inboxFile, 'utf8'); } catch { return out; }
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const obj = JSON.parse(trimmed);
+        if (obj && typeof obj.text === 'string') out.push({ t: String(obj.t || ''), text: obj.text, saved: !!obj.saved });
+      } catch { /* 跳过坏行 */ }
+    }
+    return out.slice(-limit).reverse();
+  }
+
+  inboxCount() {
+    let raw = '';
+    try { raw = fs.readFileSync(this.inboxFile, 'utf8'); } catch { return 0; }
+    return raw.split(/\r?\n/).filter((line) => line.trim()).length;
+  }
+
   // ---------- 鉴权 ----------
 
   auth(req, url) {
@@ -559,6 +613,9 @@ class FileStation {
       }
       if (req.method === 'GET' && route === '/state') {
         return this.safeJson(res, 200, { ok: true, queue: this.queueTail(50) });
+      }
+      if (req.method === 'GET' && route === '/inbox') {
+        return this.safeJson(res, 200, { ok: true, items: this.inboxList(30) });
       }
       if (req.method === 'GET' && route === '/files') return this.handleFiles(res, url);
       if (req.method === 'GET' && route === '/texts') return this.handleTexts(res);
@@ -803,25 +860,35 @@ class FileStation {
     const body = await this.readBody(req, MAX_TEXT + 1).catch(() => null);
     if (!body) return this.safeJson(res, 413, { ok: false, error: '文本超过 200 KB 上限' });
     let text = '';
+    let saveFile = false;
     const type = String(req.headers['content-type'] || '').toLowerCase();
     if (type.includes('application/json')) {
-      try { text = String(JSON.parse(body.toString('utf8')).text || ''); } catch { text = ''; }
+      try {
+        const payload = JSON.parse(body.toString('utf8')) || {};
+        text = String(payload.text || '');
+        saveFile = payload.save === true || payload.save === 1 || payload.save === '1' || payload.save === 'true';
+      } catch { text = ''; }
     } else if (type.includes('x-www-form-urlencoded')) {
       const params = new URLSearchParams(body.toString('utf8'));
       text = params.get('text') || '';
+      const flag = String(params.get('save') || '').toLowerCase();
+      saveFile = flag === '1' || flag === 'true' || flag === 'on';
     } else {
       text = body.toString('utf8').replace(/^\uFEFF/, '');
     }
     if (!text.trim()) return this.safeJson(res, 200, { ok: false, error: '内容为空' });
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' +
-      pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
-    const target = this.uniquePath(path.join(this.shareDir, '文本-' + stamp + '.txt'));
     const bytes = Buffer.from(text, 'utf8');
+    // 先落收件箱：面板「手机发来的文字」直接显示内容，这是默认行为，不生成文件。
+    const entry = this.inboxAppend(text, saveFile);
+    if (!saveFile) {
+      this.log('文字(收件箱) ' + bytes.length + ' B');
+      return this.safeJson(res, 200, { ok: true, saved: false, t: entry.t, bytes: bytes.length });
+    }
+    const stamp = entry.t.replace(/[-:]/g, '').replace(' ', '-');
+    const target = this.uniquePath(path.join(this.shareDir, '文本-' + stamp + '.txt'));
     fs.writeFileSync(target, bytes);
     this.log('文字 ' + path.basename(target) + ' (' + bytes.length + ' B)');
-    return this.safeJson(res, 200, { ok: true, name: path.basename(target), bytes: bytes.length });
+    return this.safeJson(res, 200, { ok: true, saved: true, t: entry.t, name: path.basename(target), bytes: bytes.length });
   }
 
   async handleShotPost(req, res) {
@@ -950,6 +1017,10 @@ class FileStation {
       if (req.method !== 'GET') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
       return this.safeJson(res, 200, this.statusPayload());
     }
+    if (kind === 'inbox') {
+      if (req.method !== 'GET') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
+      return this.safeJson(res, 200, { ok: true, items: this.inboxList(50), count: this.inboxCount() });
+    }
     return this.readBody(req, 256 * 1024)
       .then((body) => {
         let payload = {};
@@ -992,6 +1063,7 @@ class FileStation {
       uploads: recent(this.uploadDir),
       texts: recent(this.shareDir).filter((x) => x.n.toLowerCase().endsWith('.txt')),
       queue,
+      inboxCount: this.inboxCount(),
       shotAt,
       shotInfo: this.shotInfo,
       startedAt: this.startedAt,
@@ -1029,6 +1101,10 @@ class FileStation {
       }
       case 'clear-queue': {
         try { fs.writeFileSync(this.queueFile, '', 'utf8'); } catch { /* ignore */ }
+        return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
+      }
+      case 'clear-inbox': {
+        try { fs.writeFileSync(this.inboxFile, '', 'utf8'); } catch { /* ignore */ }
         return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
       }
       default:

@@ -42,6 +42,14 @@ window.__ModuleLoader__.load({
         recentTexts: '共享文件夹里的文字',
         messages: '手机留言',
         clearQueue: '清空留言',
+        inboxTitle: '手机发来的文字',
+        inboxHint: '手机点「发送到电脑」后，内容直接显示在这里，默认不生成 txt 文件；需要存档时在手机上勾选「同时存成 txt 文件」。',
+        inboxEmpty: '还没有收到文字',
+        inboxSaved: '已存文件',
+        clearInbox: '清空文字',
+        inboxCleared: '文字已清空',
+        copyMsg: '复制',
+        copiedMsg: '已复制',
         empty: '暂时没有内容',
         settings: '额外共享目录',
         settingsHint: '把电脑上其他文件夹加进来，手机就能浏览和下载（也可以把文件上传到共享目录）。',
@@ -88,6 +96,14 @@ window.__ModuleLoader__.load({
         recentTexts: 'Text files in the shared folder',
         messages: 'Messages from phone',
         clearQueue: 'Clear messages',
+        inboxTitle: 'Text sent from the phone',
+        inboxHint: 'Text sent from the phone appears here directly — no txt file is written unless the phone opts in.',
+        inboxEmpty: 'No text yet',
+        inboxSaved: 'saved to file',
+        clearInbox: 'Clear text',
+        inboxCleared: 'Text cleared',
+        copyMsg: 'Copy',
+        copiedMsg: 'Copied',
         empty: 'Nothing here yet',
         settings: 'Extra shared folders',
         settingsHint: 'Add other folders on this computer so the phone can browse and download them.',
@@ -174,6 +190,19 @@ window.__ModuleLoader__.load({
 .fs-msg .t { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-right: 8px;
   font-variant-numeric: tabular-nums; }
 .fs-msg .b { white-space: pre-wrap; word-break: break-word; }
+.fs-bubbles { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.fs-bubble { border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; padding: 8px 10px;
+  background: var(--dsw-alias-bg-layer-2); }
+.fs-bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.fs-bubble-head .ts { font-size: 12px; color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums; }
+.fs-bubble-head .badge { font-size: 11px; color: var(--dsw-alias-state-success-primary);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 0 5px; }
+.fs-bubble-head .copy { margin-left: auto; border: 0; background: transparent; cursor: pointer;
+  font-size: 12px; color: var(--dsw-alias-label-secondary); padding: 2px 4px; border-radius: 6px; }
+.fs-bubble-head .copy:hover { color: var(--dsw-alias-brand-primary); background: var(--dsw-alias-bg-layer-1); }
+.fs-bubble .b { font-size: 13px; line-height: 1.55; color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
 .fs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .fs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 8px;
   border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2);
@@ -273,6 +302,7 @@ window.__ModuleLoader__.load({
       const ctx = props && props.ctx;
       const t = useT(ctx);
       const [status, setStatus] = useState(null);
+      const [inbox, setInbox] = useState([]);
       const [failed, setFailed] = useState(false);
       const [busy, setBusy] = useState('');
       const [toast, setToast] = useState(null);
@@ -287,12 +317,17 @@ window.__ModuleLoader__.load({
 
       const load = useCallback(async () => {
         try {
-          const res = await fetch('/file-station/api/status', { headers: { Accept: 'application/json' } });
-          const data = await res.json();
+          const [statusRes, inboxRes] = await Promise.all([
+            fetch('/file-station/api/status', { headers: { Accept: 'application/json' } }),
+            fetch('/file-station/api/inbox', { headers: { Accept: 'application/json' } }),
+          ]);
+          const data = await statusRes.json();
+          const box = await inboxRes.json().catch(() => null);
           if (data && data.ok) {
             setStatus(data);
             setFailed(false);
           } else setFailed(true);
+          if (box && box.ok && Array.isArray(box.items)) setInbox(box.items);
         } catch {
           setFailed(true);
         }
@@ -321,6 +356,7 @@ window.__ModuleLoader__.load({
             else if (action === 'reset-token') say(t('resetDone'));
             else if (action === 'set-share-dirs') say(t('dirsUpdated'));
             else if (action === 'clear-queue') say(t('cleared'));
+            else if (action === 'clear-inbox') say(t('inboxCleared'));
           } else say((data && data.error) || t('netError'), false);
         } catch {
           say(t('netError'), false);
@@ -349,6 +385,25 @@ window.__ModuleLoader__.load({
           say(ok ? t('copied') : t('copyFail'), ok);
         }
       }, [status, say, t]);
+
+      const copyText = useCallback(async (text) => {
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          say(t('copiedMsg'));
+        } catch {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch { ok = false; }
+          document.body.removeChild(ta);
+          say(ok ? t('copiedMsg') : t('copyFail'), ok);
+        }
+      }, [say, t]);
 
       const addDir = useCallback(() => {
         const next = dirInput.trim();
@@ -457,6 +512,23 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'n' }, '📝 ' + it.n),
                   h('span', { className: 'm' }, fmtSize(it.sz) + ' · ' + fmtTime(it.mtime)))))
                 : h('div', { className: 'fs-empty' }, t('empty')))),
+
+          // 手机发来的文字（默认只在这里显示，不落文件）
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-card-head' },
+              h('div', { className: 'fs-card-title' }, t('inboxTitle') + (inbox.length ? ' (' + inbox.length + ')' : '')),
+              inbox.length
+                ? h(Btn, { onClick: () => act('clear-inbox'), danger: true, disabled: busy === 'clear-inbox' }, t('clearInbox'))
+                : null),
+            h('div', { className: 'fs-hint' }, t('inboxHint')),
+            inbox.length
+              ? h('div', { className: 'fs-bubbles' }, inbox.map((m, i) => h('div', { className: 'fs-bubble', key: i },
+                  h('div', { className: 'fs-bubble-head' },
+                    h('span', { className: 'ts' }, m.t || ''),
+                    m.saved ? h('span', { className: 'badge' }, t('inboxSaved')) : null,
+                    h('button', { type: 'button', className: 'copy', onClick: () => copyText(m.text) }, t('copyMsg'))),
+                  h('div', { className: 'b' }, m.text))))
+              : h('div', { className: 'fs-empty' }, t('inboxEmpty'))),
 
           // 手机留言
           h('div', { className: 'fs-card' },

@@ -35,6 +35,11 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   .item .meta{color:#98a0ad;font-size:12px;white-space:nowrap}
   .status{margin-top:8px;font-size:13px;color:#98a0ad;word-break:break-all}
   .status.err{color:#ff7b72}
+  .opt{display:flex;gap:7px;align-items:center;margin-top:9px;font-size:13px;color:#98a0ad}
+  .opt input{accent-color:#4c8dff}
+  .sent{padding:7px 0;border-top:1px solid #242a34;font-size:13px;white-space:pre-wrap;word-break:break-word}
+  .sent .t{color:#98a0ad;font-size:12px;margin-right:6px}
+  .sent .badge{color:#7ee2a8;font-size:11px;margin-left:6px}
   .status.ok{color:#56d364}
   pre{white-space:pre-wrap;word-break:break-word;background:#0f1319;border:1px solid #2f3a49;
       border-radius:10px;padding:10px;max-height:46vh;overflow:auto;font-size:13px;margin:10px 0 0}
@@ -62,8 +67,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
 <div class="card">
   <h2>📝 发一段文字到电脑</h2>
-  <textarea id="t-send" placeholder="写完点下面的按钮，会存成一个 txt 文件放到共享文件夹"></textarea>
-  <div class="row" style="margin-top:8px"><button class="primary" id="b-txt">保存到电脑</button><span class="muted" id="s-txt"></span></div>
+  <textarea id="t-send" placeholder="写完点发送：内容会直接出现在电脑面板的「手机发来的文字」里"></textarea>
+  <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
+  <div class="row" style="margin-top:8px"><button class="primary" id="b-txt">发送到电脑</button><span class="muted" id="s-txt"></span></div>
+  <div class="list" id="l-sent"></div>
 </div>
 
 <div class="card">
@@ -198,16 +205,43 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   };
 
   // ---- 发文字 ----
+  // 默认只进电脑面板的收件箱（不落文件）；勾选「同时存成 txt 文件」才额外写 txt。
+  var sentLog = [];
+  function renderSent() {
+    var box = $('l-sent');
+    if (!box) return;
+    box.textContent = '';
+    sentLog.slice(-6).reverse().forEach(function (it) {
+      var d = document.createElement('div');
+      d.className = 'sent';
+      var t = document.createElement('span'); t.className = 't'; t.textContent = it.t || '';
+      d.appendChild(t);
+      d.appendChild(document.createTextNode(it.text || ''));
+      if (it.saved) {
+        var b = document.createElement('span'); b.className = 'badge'; b.textContent = '[已存文件]';
+        d.appendChild(b);
+      }
+      box.appendChild(d);
+    });
+  }
+  function loadSent() {
+    fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
+      if (r && r.ok && r.items) { sentLog = r.items.slice().reverse(); renderSent(); }
+    }).catch(function () {});
+  }
   $('b-txt').onclick = function () {
     var text = $('t-send').value;
     if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }
+    var save = !!($('c-save') && $('c-save').checked);
     var b = $('b-txt'); b.disabled = true;
-    api('/text', { text: text }).then(function (r) {
+    api('/text', { text: text, save: save }).then(function (r) {
       if (r.ok) {
-        set('s-txt', '已保存：' + r.name + '（' + fmt(r.bytes) + '）', 'ok');
+        set('s-txt', r.saved ? ('已保存：' + r.name + '（' + fmt(r.bytes) + '）') : '已发送到电脑面板（未生成文件）', 'ok');
+        sentLog.push({ t: r.t || '', text: text, saved: !!r.saved });
+        renderSent();
         $('t-send').value = '';
-        loadTexts();
-      } else set('s-txt', r.error || '保存失败', 'err');
+        if (r.saved) loadTexts();
+      } else set('s-txt', r.error || '发送失败', 'err');
     }).catch(function (e) { set('s-txt', String(e), 'err'); })
       .then(function () { b.disabled = false; });
   };
@@ -336,6 +370,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
   loadFiles('');
   loadTexts();
+  loadSent();
   loadQueue();
   setInterval(function () { loadQueue(); }, 5000);
 })();
