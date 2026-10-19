@@ -28,6 +28,8 @@ const LOG_MAX = 5 * 1024 * 1024;
 const FREE_MARGIN = 200 * 1024 * 1024;
 /** 单个上传文件上限（8 GiB）。 */
 const MAX_UPLOAD = 8 * 1024 * 1024 * 1024;
+/** 面板里手动「显示连接地址」后，完整地址/二维码的有效期（毫秒）。 */
+const REVEAL_TTL = 90 * 1000;
 /** 手机发来的文字默认只进「收件箱」（面板里直接显示），不落 txt；收件箱保留最近 N 条。 */
 const INBOX_KEEP = 500;
 const INBOX_TRIM_AT = 800;
@@ -248,7 +250,8 @@ class FileStation {
         this.server = server;
         this.port = port;
         this.startedAt = Date.now();
-    this.lastUpload = null;
+        this.lastUpload = null;
+        this.reveal = null;
         this.log('=== 启动 === port=' + port + ' lan=' + this.lanUrl());
       };
       const onError = (err) => {
@@ -282,6 +285,32 @@ class FileStation {
   lanUrl() {
     const ip = this.lanIp();
     return 'http://' + (ip || '127.0.0.1') + ':' + (this.port || this.portPref) + '/?k=' + this.token;
+  }
+
+  /** 遮住访问码的展示版地址，面板默认只显示这个。 */
+  maskedUrl() {
+    return this.lanUrl().replace(/k=.*$/, 'k=••••••••••••');
+  }
+
+  /** 手动「显示连接地址」后签发的临时凭据，用于取完整地址和二维码。 */
+  issueReveal() {
+    const token = crypto.randomBytes(8).toString('hex');
+    const until = Date.now() + REVEAL_TTL;
+    this.reveal = { token, until };
+    return { token, until };
+  }
+
+  revealValid(token) {
+    const r = this.reveal;
+    if (!r || !token) return false;
+    if (Date.now() > r.until) { this.reveal = null; return false; }
+    const a = Buffer.from(String(token));
+    const b = Buffer.from(r.token);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  clearReveal() {
+    this.reveal = null;
   }
 
   localUrl() {
@@ -1265,6 +1294,10 @@ class FileStation {
       return undefined;
     }
     if (kind === 'qr') {
+      // 二维码里带着访问码，必须先用「显示连接地址」拿到临时凭据才能取
+      let reveal = '';
+      try { reveal = new URL(req.url, 'http://127.0.0.1').searchParams.get('r') || ''; } catch { reveal = ''; }
+      if (!this.revealValid(reveal)) return this.safeJson(res, 403, { ok: false, error: '请先在面板里点「显示连接地址」' });
       const svg = Buffer.from(this.qrSvg(), 'utf8');
       if (!svg.length) return this.safeJson(res, 500, { ok: false, error: '二维码生成失败' });
       res.writeHead(200, {
@@ -1314,10 +1347,12 @@ class FileStation {
       ok: true,
       running: this.running,
       port: this.port || this.portPref,
-      lanUrl: this.lanUrl(),
-      localUrl: this.localUrl(),
+      // 默认只给遮码后的地址；完整地址与二维码要手动「显示」后才签发
+      lanUrlMasked: this.maskedUrl(),
+      localUrlMasked: this.localUrl().replace(/k=.*$/, 'k=••••••••••••'),
+      revealed: Boolean(this.reveal && Date.now() <= this.reveal.until),
+      revealUntil: this.reveal ? this.reveal.until : 0,
       lanIp: this.lanIp(),
-      token: this.token,
       dataDir: this.dataDir,
       shareDir: this.shareDir,
       uploadDir: this.uploadDir,
@@ -1362,7 +1397,23 @@ class FileStation {
         const result = await this.takeShot();
         return this.safeJson(res, 200, { ...result, status: this.statusPayload() });
       }
+      case 'reveal-connection': {
+        const r = this.issueReveal();
+        this.log('面板显示连接地址 (90s)');
+        return this.safeJson(res, 200, {
+          ok: true,
+          lanUrl: this.lanUrl(),
+          localUrl: this.localUrl(),
+          qrPath: '/file-station/api/qr.svg?r=' + r.token,
+          until: r.until,
+          status: this.statusPayload(),
+        });
+      }
+      case 'hide-connection':
+        this.clearReveal();
+        return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
       case 'reset-token':
+        this.clearReveal();
         this.resetToken();
         return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
       case 'set-share-dirs': {

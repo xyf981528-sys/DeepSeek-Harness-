@@ -21,6 +21,11 @@ window.__ModuleLoader__.load({
         stopped: '未启动',
         address: '手机访问地址',
         addressHint: '手机和电脑连同一个 WiFi，用手机相机扫下面的二维码，或者直接打开这个地址。',
+        revealHint: '地址和二维码默认隐藏，避免旁人看到访问码。需要连手机时再点「显示连接地址」。',
+        revealShow: '显示连接地址',
+        revealHide: '收起',
+        revealLocked: '连接地址与二维码已隐藏（含访问码，仅本机可见）',
+        revealExpire: '90 秒后自动收起；收起后二维码立即失效。',
         noLan: '没有检测到局域网 IP，请确认电脑已连接 WiFi 或网线。',
         qrTitle: '扫码连接',
         qrHint: '手机相机对准二维码，或微信扫一扫，同一 WiFi 下点开链接即可。',
@@ -87,6 +92,11 @@ window.__ModuleLoader__.load({
         stopped: 'Not running',
         address: 'Phone address',
         addressHint: 'Connect the phone to the same Wi-Fi, then scan the QR code below or open the address directly.',
+        revealHint: 'The address and QR code stay hidden by default so nobody nearby can read the access code. Click "Show connection" when you need to connect a phone.',
+        revealShow: 'Show connection',
+        revealHide: 'Hide',
+        revealLocked: 'Address and QR code hidden (they contain the access code, local eyes only)',
+        revealExpire: 'Auto-hides after 90 seconds; the QR code stops working immediately.',
         noLan: 'No LAN IP detected. Make sure this computer is on Wi-Fi or Ethernet.',
         qrTitle: 'Scan to connect',
         qrHint: 'Point the phone camera at the QR code on the same Wi-Fi, then open the link.',
@@ -182,6 +192,11 @@ window.__ModuleLoader__.load({
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px;
   color: var(--dsw-alias-label-primary); overflow: hidden; }
 .fs-url span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-url-masked { color: var(--dsw-alias-label-secondary); letter-spacing: .5px; }
+.fs-locked { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 10px 12px;
+  border: 1px dashed var(--dsw-alias-border-l1); border-radius: 10px;
+  font-size: 12px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); }
+.fs-lock-ico { font-size: 14px; }
 .fs-qr { display: flex; gap: 16px; align-items: center; margin-top: 14px; padding-top: 14px;
   border-top: 1px dashed var(--dsw-alias-border-l1); }
 .fs-qr-img { flex: none; border-radius: 8px; background: #ffffff; padding: 6px;
@@ -338,6 +353,7 @@ window.__ModuleLoader__.load({
       const [toast, setToast] = useState(null);
       const [dirInput, setDirInput] = useState('');
       const [draft, setDraft] = useState('');
+      const [reveal, setReveal] = useState(null);
       const toastTimer = useRef(0);
       const seenUpload = useRef(0);
       const sayRef = useRef(null);
@@ -411,7 +427,7 @@ window.__ModuleLoader__.load({
       }, [load, say, t]);
 
       const copy = useCallback(async () => {
-        const text = status ? status.lanUrl : '';
+        const text = reveal ? reveal.lanUrl : '';
         if (!text) return;
         try {
           await navigator.clipboard.writeText(text);
@@ -428,7 +444,46 @@ window.__ModuleLoader__.load({
           document.body.removeChild(ta);
           say(ok ? t('copied') : t('copyFail'), ok);
         }
-      }, [status, say, t]);
+      }, [reveal, say, t]);
+
+      // 手动「显示连接地址」：向 Host 要一次性凭据（90 秒后失效）
+      const showConn = useCallback(async () => {
+        setBusy('reveal-connection');
+        try {
+          const res = await fetch('/file-station/api/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'reveal-connection' }),
+          });
+          const data = await res.json();
+          if (data && data.ok && data.lanUrl) {
+            setReveal({ lanUrl: data.lanUrl, qrPath: data.qrPath, until: data.until || 0 });
+          } else say((data && data.error) || t('netError'), false);
+        } catch {
+          say(t('netError'), false);
+        } finally {
+          setBusy('');
+        }
+      }, [say, t]);
+
+      const hideConn = useCallback(async () => {
+        setReveal(null);
+        try {
+          await fetch('/file-station/api/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'hide-connection' }),
+          });
+        } catch { /* 忽略：本地隐藏已经生效 */ }
+      }, []);
+
+      // 到点自动收起，避免地址一直挂在屏幕上
+      useEffect(() => {
+        if (!reveal) return undefined;
+        const left = Math.max(0, (reveal.until || 0) - Date.now());
+        const id = setTimeout(() => setReveal(null), left || 90000);
+        return () => clearTimeout(id);
+      }, [reveal]);
 
       const copyText = useCallback(async (text) => {
         if (!text) return;
@@ -508,26 +563,39 @@ window.__ModuleLoader__.load({
             h('div', { className: 'fs-card-head' },
               h('div', { className: 'fs-card-title' }, t('address')),
               toast ? h('span', { className: 'fs-toast' + (toast.ok ? '' : ' err') }, toast.text) : null),
-            h('div', { className: 'fs-hint' }, t('addressHint')),
+            h('div', { className: 'fs-hint' }, t(reveal ? 'addressHint' : 'revealHint')),
             status.lanIp ? null : h('div', { className: 'fs-warn', style: { marginTop: 8 } }, t('noLan')),
-            h('div', { className: 'fs-urlrow' },
-              h('div', { className: 'fs-url', title: status.lanUrl }, h('span', null, status.lanUrl)),
-              h(Btn, { primary: true, onClick: copy }, t('copy')),
-              h(Btn, { onClick: () => act('open-local'), disabled: busy === 'open-local' }, t('openLocal'))),
-            status.lanIp
-              ? h('div', { className: 'fs-qr' },
-                  h('img', {
-                    className: 'fs-qr-img',
-                    src: '/file-station/api/qr.svg?v=' + encodeURIComponent(status.token || ''),
-                    alt: t('qrAlt'),
-                    width: 168,
-                    height: 168,
-                  }),
-                  h('div', { className: 'fs-qr-side' },
-                    h('div', { className: 'fs-qr-title' }, '📱 ' + t('qrTitle')),
-                    h('div', { className: 'fs-hint' }, t('qrHint')),
-                    h('div', { className: 'fs-qr-url' }, status.lanUrl)))
-              : null),
+            reveal
+              ? [
+                  h('div', { className: 'fs-urlrow', key: 'u' },
+                    h('div', { className: 'fs-url', title: reveal.lanUrl }, h('span', null, reveal.lanUrl)),
+                    h(Btn, { primary: true, onClick: copy }, t('copy')),
+                    h(Btn, { onClick: hideConn }, t('revealHide'))),
+                  status.lanIp
+                    ? h('div', { className: 'fs-qr', key: 'q' },
+                        h('img', {
+                          className: 'fs-qr-img',
+                          src: reveal.qrPath,
+                          alt: t('qrAlt'),
+                          width: 168,
+                          height: 168,
+                        }),
+                        h('div', { className: 'fs-qr-side' },
+                          h('div', { className: 'fs-qr-title' }, '📱 ' + t('qrTitle')),
+                          h('div', { className: 'fs-hint' }, t('qrHint')),
+                          h('div', { className: 'fs-qr-url' }, reveal.lanUrl),
+                          h('div', { className: 'fs-warn', style: { marginTop: 6 } }, t('revealExpire'))))
+                    : null,
+                ]
+              : [
+                  h('div', { className: 'fs-urlrow', key: 'm' },
+                    h('div', { className: 'fs-url fs-url-masked' }, h('span', null, status.lanUrlMasked || '—')),
+                    h(Btn, { primary: true, onClick: showConn, disabled: busy === 'reveal-connection' }, '👁 ' + t('revealShow')),
+                    h(Btn, { onClick: () => act('open-local'), disabled: busy === 'open-local' }, t('openLocal'))),
+                  h('div', { className: 'fs-locked', key: 'l' },
+                    h('span', { className: 'fs-lock-ico' }, '🔒'),
+                    h('span', null, t('revealLocked'))),
+                ]),
 
           // 快捷操作
           h('div', { className: 'fs-card' },
