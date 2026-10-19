@@ -104,18 +104,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <script>
 (function () {
   'use strict';
-  var K = new URLSearchParams(location.search).get('k') || '';
-  if (K) {
-    try { document.cookie = 'k=' + K + ';path=/;max-age=2592000;SameSite=Lax'; } catch (e) {}
-    try { history.replaceState(null, '', '/'); } catch (e) {}
-  }
-  function key() { return K || (document.cookie.match(/(?:^|;\\s*)k=([^;]*)/) || [])[1] || ''; }
-  function qs(extra) {
-    var k = key();
-    var s = k ? 'k=' + encodeURIComponent(k) : '';
-    if (extra) s += (s ? '&' : '') + extra;
-    return s ? '?' + s : '';
-  }
+  // 访问码由服务端写成 HttpOnly Cookie（页面 JS 读不到），这里的请求靠浏览器自动携带。
+  // 打开 ?k=... 时服务端会写 Cookie 并 302 到 /，所以地址栏和 history 里不会留令牌。
+  function qs(extra) { return extra ? '?' + extra : ''; }
   function $(id) { return document.getElementById(id); }
   function set(id, text, cls) {
     var el = $(id); if (!el) return;
@@ -136,12 +127,6 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       body: JSON.stringify(body),
     }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
   }
-  if (!K && !key()) {
-    document.body.innerHTML = '<div class="card"><h2>缺少访问令牌</h2>' +
-      '<p class="muted">请在电脑上的「文件传输台」里复制完整地址（带 <code>?k=</code> 的那一串）再打开。</p></div>';
-    return;
-  }
-
   // ---- 截屏 ----
   $('b-shot').onclick = function () {
     var b = $('b-shot'); b.disabled = true; set('s-shot', '正在截屏…');

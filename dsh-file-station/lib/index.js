@@ -19,7 +19,6 @@ import { renderPhonePage } from './phone-page.js';
 
 const PORT_PREF = 19790;
 const PORT_TRIES = 40;
-const MAX_FAILS = 10;
 const LOCK_SECONDS = 600;
 const CHUNK = 1024 * 1024;
 const MAX_TEXT = 200 * 1024;
@@ -27,9 +26,17 @@ const MAX_QUEUE_BODY = 64 * 1024;
 const TEXTS_LIMIT = 30;
 const LOG_MAX = 5 * 1024 * 1024;
 const FREE_MARGIN = 200 * 1024 * 1024;
+/** 单个上传文件上限（8 GiB）。 */
+const MAX_UPLOAD = 8 * 1024 * 1024 * 1024;
 /** 手机发来的文字默认只进「收件箱」（面板里直接显示），不落 txt；收件箱保留最近 N 条。 */
 const INBOX_KEEP = 500;
 const INBOX_TRIM_AT = 800;
+/** `/text` 只回显这些扩展名的文件（`.txt` 列表之外的内容不允许被当读文件接口用）。 */
+const TEXT_EXT = new Set([
+  '.txt', '.md', '.log', '.csv', '.json', '.jsonl', '.ini', '.cfg', '.conf',
+  '.yml', '.yaml', '.xml', '.html', '.htm', '.css', '.js', '.ts', '.py', '.ps1',
+  '.bat', '.cmd', '.sh', '.sql', '.toml', '.properties', '.srt', '.vtt', '.tex',
+]);
 
 /** 插件根目录（lib/index.js 的上一级），用于把默认数据目录固定在 D 盘插件目录下。 */
 const PLUGIN_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -205,10 +212,12 @@ class FileStation {
     this.token = '';
     this.failCount = 0;
     this.lockUntil = 0;
+    this.failMap = new Map();
+    this.globalFails = [];
+    this.startedAt = 0;
     this.server = null;
     this.port = 0;
     this.shotInfo = '';
-    this.startedAt = 0;
   }
 
   // ---------- 启动 / 停止 ----------
@@ -227,7 +236,9 @@ class FileStation {
       });
     });
     server.headersTimeout = 30000;
-    server.requestTimeout = 0;
+    server.requestTimeout = 30 * 60 * 1000; // 慢速大文件上传也要允许，但不能无限挂住
+    server.keepAliveTimeout = 5000;
+    server.maxConnections = 64;
 
     let port = this.portPref;
     const attempt = () => {
@@ -383,16 +394,54 @@ class FileStation {
   saveExtraDirs(list) {
     const clean = [];
     for (const item of list) {
+      if (clean.length >= 20) break;
       const p = String(item || '').trim();
       if (!p) continue;
       let real;
       try { real = fs.realpathSync(p); } catch { continue; }
-      if (fs.statSync(real).isDirectory() && !clean.includes(real)) clean.push(real);
+      let isDir = false;
+      try { isDir = fs.statSync(real).isDirectory(); } catch { isDir = false; }
+      if (!isDir) continue;
+      if (!this.extraDirAllowed(real)) {
+        this.log('EXTRA: 拒绝不安全的目录 ' + real);
+        continue;
+      }
+      if (!clean.includes(real)) clean.push(real);
     }
     const body = '# 每行一个额外共享目录（手机可浏览/下载，也可上传到共享目录）\n' + clean.join('\n') + '\n';
     fs.writeFileSync(this.extraFile, body, 'utf8');
     this.extraDirs = clean;
     return clean;
+  }
+
+  /** 额外共享目录的安全边界：系统目录、盘符根、UNC、以及数据目录及其祖先一律拒绝。 */
+  extraDirAllowed(real) {
+    if (!real) return false;
+    if (real.startsWith('\\\\')) return false;
+    try { if (path.parse(real).root === real) return false; } catch { return false; }
+    const norm = (s) => String(s || '').toLowerCase().replace(/[\\/]+$/, '');
+    const lower = norm(real);
+    if (!lower) return false;
+    const home = norm(process.env.USERPROFILE || 'C:\\Users\\K');
+    // 整个目录树都拒绝：系统目录、DSH 配置（含访问码）、SSH、AppData（浏览器 Cookie/令牌）
+    const denyTrees = [
+      process.env.SystemRoot || 'C:\\Windows',
+      process.env.ProgramFiles || 'C:\\Program Files',
+      process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+      process.env.ProgramData || 'C:\\ProgramData',
+      path.join(home, '.dsh'),
+      path.join(home, '.ssh'),
+      path.join(home, 'appdata'),
+    ].map(norm).filter(Boolean);
+    for (const d of denyTrees) {
+      if (lower === d || lower.startsWith(d + '\\')) return false;
+    }
+    // 用户主目录本身（只允许它的子目录，例如 Downloads、Desktop）
+    if (lower === home) return false;
+    const data = norm(this.dataDir);
+    // 数据目录本身、以及包含数据目录的上级（会把访问码/日志一起暴露）都不允许
+    if (data && (lower === data || data.startsWith(lower + '\\'))) return false;
+    return true;
   }
 
   roots() {
@@ -474,6 +523,8 @@ class FileStation {
     }
     out = out.replace(/[\\/:*?"<>|]/g, '_').replace(/^[. ]+|[. ]+$/g, '');
     if (!out) out = 'upload_' + new Date().toTimeString().slice(0, 8).replace(/:/g, '') + '.bin';
+    // Windows 保留名（CON/PRN/AUX/NUL/COM1/LPT1…）写成文件会出怪事，加前缀避开
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(out)) out = '_' + out;
     return out.slice(0, 120);
   }
 
@@ -608,31 +659,98 @@ class FileStation {
     return raw.split(/\r?\n/).filter((line) => line.trim()).length;
   }
 
-  // ---------- 鉴权 ----------
+  // ---------- 鉴权（按 IP 退避 + 全局熔断 + HttpOnly Cookie） ----------
+
+  clientIp(req) {
+    let raw = '';
+    try { raw = String((req.socket && req.socket.remoteAddress) || ''); } catch { raw = ''; }
+    return raw.replace(/^::ffff:/, '') || 'local';
+  }
+
+  /** 该 IP 当前是否处于冷却期，返回还需等待的秒数（0 = 未被限流）。 */
+  retryAfter(req) {
+    const now = Date.now();
+    if (now < this.lockUntil) return Math.ceil((this.lockUntil - now) / 1000);
+    const rec = this.failMap.get(this.clientIp(req));
+    if (rec && rec.until > now) return Math.ceil((rec.until - now) / 1000);
+    return 0;
+  }
+
+  recordFail(ip, now) {
+    const rec = this.failMap.get(ip) || { n: 0, last: 0, until: 0 };
+    if (now - rec.last > 15 * 60 * 1000) rec.n = 0;
+    rec.n += 1;
+    rec.last = now;
+    if (rec.n >= 5) {
+      const backoff = Math.min(600, 30 * Math.pow(2, rec.n - 5));
+      rec.until = now + backoff * 1000;
+      rec.n = 0;
+      this.log('AUTH: ip=' + ip + ' 失败过多，冷却 ' + backoff + ' 秒');
+    }
+    this.failMap.set(ip, rec);
+    if (this.failMap.size > 200) {
+      for (const [key, val] of this.failMap) {
+        if (val.until < now && now - val.last > 15 * 60 * 1000) this.failMap.delete(key);
+      }
+    }
+    this.globalFails.push(now);
+    this.globalFails = this.globalFails.filter((t) => now - t < 10 * 60 * 1000);
+    if (this.globalFails.length >= 120) {
+      this.lockUntil = now + LOCK_SECONDS * 1000;
+      this.globalFails = [];
+      this.log('AUTH: 全局失败过多，锁定 ' + LOCK_SECONDS + ' 秒');
+    }
+  }
 
   auth(req, url) {
-    if (Date.now() < this.lockUntil) return false;
+    const now = Date.now();
+    if (now < this.lockUntil) return false;
+    const ip = this.clientIp(req);
+    const rec = this.failMap.get(ip);
+    if (rec && rec.until > now) return false;
     const cookie = String(req.headers.cookie || '');
     let provided = url.searchParams.get('k') || '';
     if (!provided) {
       const match = /(?:^|;\s*)k=([^;]*)/.exec(cookie);
-      if (match) provided = decodeURIComponent(match[1]);
+      if (match) {
+        try { provided = decodeURIComponent(match[1]); } catch { provided = ''; }
+      }
     }
-    if (provided && provided.length === this.token.length) {
-      try {
-        if (crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(this.token))) {
-          this.failCount = 0;
-          return true;
-        }
-      } catch { /* ignore */ }
+    if (provided) {
+      const a = Buffer.from(String(provided));
+      const b = Buffer.from(this.token);
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        this.failCount = 0;
+        this.failMap.delete(ip);
+        return true;
+      }
     }
     this.failCount += 1;
-    if (this.failCount >= MAX_FAILS) {
-      this.lockUntil = Date.now() + LOCK_SECONDS * 1000;
-      this.failCount = 0;
-      this.log('AUTH: 连续失败次数过多，锁定 ' + LOCK_SECONDS + ' 秒');
-    }
+    this.recordFail(ip, now);
+    if (provided) this.log('AUTH: ip=' + ip + ' 访问码错误（累计 ' + this.failCount + ' 次）');
     return false;
+  }
+
+  /** 通过 ?k= 进来时写 HttpOnly Cookie：之后浏览器自动携带，页面 JS 读不到令牌。 */
+  setAuthCookie(res) {
+    try {
+      res.setHeader('Set-Cookie', 'k=' + this.token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30 * 24 * 3600));
+    } catch { /* ignore */ }
+  }
+
+  /** 拒绝跨站发起的写操作（Cookie 已 SameSite=Lax，这里再加一道 Origin/ Sec-Fetch-Site 校验）。 */
+  sameSite(req) {
+    const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+    if (site === 'cross-site') return false;
+    const origin = String(req.headers.origin || '');
+    if (origin) {
+      try {
+        const parsed = new URL(origin);
+        const host = String(req.headers.host || '');
+        if (parsed.host.toLowerCase() !== host.toLowerCase()) return false;
+      } catch { return false; }
+    }
+    return true;
   }
 
   // ---------- 手机端 HTTP ----------
@@ -640,8 +758,23 @@ class FileStation {
   async handlePhone(req, res) {
     const url = new URL(req.url || '/', 'http://' + (req.headers.host || 'localhost'));
     const route = url.pathname;
+    const queryToken = url.searchParams.get('k') || '';
     if (!this.auth(req, url)) {
+      const wait = this.retryAfter(req);
+      if (wait > 0) res.setHeader('Retry-After', String(wait));
       return this.safeJson(res, 401, { ok: false, error: 'unauthorized' });
+    }
+    if (queryToken) {
+      this.setAuthCookie(res);
+      // 打开页面时把地址栏里的令牌换成 Cookie，再 302 掉，历史记录里不留令牌
+      if (req.method === 'GET' && (route === '/' || route === '/index.html')) {
+        res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+        res.end();
+        return;
+      }
+    }
+    if (!/^(GET|HEAD)$/i.test(req.method) && !this.sameSite(req)) {
+      return this.safeJson(res, 403, { ok: false, error: 'cross-site request rejected' });
     }
     try {
       if (req.method === 'GET' && (route === '/' || route === '/index.html')) {
@@ -650,8 +783,13 @@ class FileStation {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Length': body.length,
           'Cache-Control': 'no-store',
+          'Pragma': 'no-cache',
           'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
           'Referrer-Policy': 'no-referrer',
+          'Cross-Origin-Resource-Policy': 'same-origin',
+          'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+          'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         });
         res.end(body);
         return;
@@ -759,6 +897,12 @@ class FileStation {
     let stat;
     try { stat = fs.statSync(real); } catch { return this.safeJson(res, 404, { ok: false, error: '文件不存在' }); }
     if (!stat.isFile()) return this.safeJson(res, 404, { ok: false, error: '文件不存在' });
+    // 只按纯文本回显：挡住 .env / 密钥 / 无扩展名这类文件，避免令牌泄露后被当读文件工具
+    const base = path.basename(real).toLowerCase();
+    if (base.startsWith('.') || !TEXT_EXT.has(path.extname(base))) {
+      return this.safeJson(res, 403, { ok: false, error: '只支持文本文件' });
+    }
+    if (stat.size > MAX_TEXT) return this.safeJson(res, 413, { ok: false, error: '文件超过 200 KB' });
     const body = fs.readFileSync(real);
     res.writeHead(200, {
       'Content-Type': 'text/plain; charset=utf-8',
@@ -866,6 +1010,7 @@ class FileStation {
     const name = this.safeName(rawName);
     const total = Number(req.headers['content-length'] || 0);
     if (!total || total < 0) return this.safeJson(res, 411, { ok: false, error: '缺少文件长度（Content-Length）' });
+    if (total > MAX_UPLOAD) return this.safeJson(res, 413, { ok: false, error: '单个文件超过 8 GB 上限' });
     let free = 0;
     try { free = fs.statfsSync(this.uploadDir).bavail * fs.statfsSync(this.uploadDir).bsize; } catch { free = 0; }
     if (free && total + FREE_MARGIN > free) {
@@ -943,6 +1088,11 @@ class FileStation {
 
   async handleShotPost(req, res) {
     try { await this.readBody(req, MAX_QUEUE_BODY); } catch { /* 忽略请求体 */ }
+    // 截屏是重操作（起 PowerShell），限制最小间隔，避免被刷
+    if (Date.now() - (this.lastShotAt || 0) < 3000) {
+      return this.safeJson(res, 429, { ok: false, error: '截屏太频繁，请稍等几秒' });
+    }
+    this.lastShotAt = Date.now();
     const result = await this.takeShot();
     return this.safeJson(res, 200, result);
   }
@@ -1115,6 +1265,14 @@ class FileStation {
       texts: recent(this.shareDir).filter((x) => x.n.toLowerCase().endsWith('.txt')),
       queue,
       inboxCount: this.inboxCount(),
+      lockedUntil: this.lockUntil,
+      security: {
+        cookie: 'HttpOnly; SameSite=Lax',
+        guiLoopbackOnly: true,
+        throttledIps: this.failMap.size,
+        maxConnections: 64,
+        tokenBits: 128,
+      },
       shotAt,
       shotInfo: this.shotInfo,
       startedAt: this.startedAt,

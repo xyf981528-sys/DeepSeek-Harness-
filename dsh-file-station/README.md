@@ -24,7 +24,7 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 ## 使用
 
 1. 打开侧边栏「文件传输台」，复制面板里的手机地址。
-2. 手机连同一个 WiFi，用浏览器打开该地址（末尾带 `?k=访问码`，打开后写进 Cookie，下次不用再带）。
+2. 手机连同一个 WiFi，用浏览器打开该地址（末尾带 `?k=访问码`，服务端会把它换成 HttpOnly Cookie 并跳到 `/`，下次不用再带）。
 3. 手机页面：📷 截屏、⬆ 上传、💬 和电脑对话、⬇ 浏览下载、📄 看文字。
 4. **文字/留言是双向的**：手机和电脑共用一条对话流——面板里直接显示手机发来的文字，也能在输入框写一句点「发送」推到手机；手机页每 4 秒刷新，电脑发的话以左侧气泡出现。
 5. **发文字默认不生成文件**：勾选「同时存成 txt 文件」才会在 `共享\` 里写 `文本-*.txt`（老行为）；勾选「让电脑弹窗提醒」则额外在电脑上响铃弹窗（相当于原「留言」）。
@@ -73,9 +73,19 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 
 ## 安全
 
-- 访问码 32 位十六进制，`?k=` 或 Cookie 携带；连续 10 次错误锁 10 分钟。
-- 所有路径先 `realpath` 再按白名单目录比较，`..\` 穿越会被 403。
-- 上传文件名过滤控制字符与 `\/:*?"<>|`，截断 120 字符。
+- **访问码**：128 位（32 位十六进制），`?k=` 或 Cookie 携带；比较用 `crypto.timingSafeEqual`，不泄露长度差异。
+- **HttpOnly Cookie**：用 `?k=` 打开页面时，服务端写 `Set-Cookie: k=…; HttpOnly; SameSite=Lax` 并 302 到 `/`——页面 JS 读不到令牌，浏览器历史与地址栏也不留 `?k=`。
+- **按 IP 退避**：同一 IP 连续错 5 次起冷却 30 秒，指数翻倍、上限 10 分钟；冷却期内正确令牌也拒绝（防在线爆破），并返回 `Retry-After`。
+- **全局熔断**：10 分钟内累计 120 次失败，整个服务锁 10 分钟（防分布式猜码）。
+- **跨站防护**：写操作（POST）校验 `Origin` 必须与本机同源、`Sec-Fetch-Site: cross-site` 直接 403；Cookie 本身 `SameSite=Lax`。
+- **路径白名单**：`realpath` 后再按根目录比较（不是 `startsWith` 字符串），`..\` 与符号链接逃逸都会 403。
+- **额外共享目录有安全边界**：拒绝盘符根、UNC 路径、`C:\Windows`、Program Files、ProgramData、用户主目录本身、`AppData`、`.dsh`、`.ssh`，以及数据目录本身/包含数据目录的上级（否则访问码会通过共享目录泄露）；最多 20 个。
+- **`/text` 只读文本**：仅允许 `.txt/.md/.log/.json/.csv/.yml/...` 等扩展名，隐藏文件（`.env`、`.git` 里的东西）与超过 200 KB 的文件一律拒绝——令牌泄露也不能把它当任意读文件接口。
+- **上传限制**：必须带 `Content-Length`、单文件 ≤ 8 GB、磁盘保留 200 MB 余量、文件名过滤控制字符与 `\/:*?"<>|`、Windows 保留名（`CON`/`PRN`/`COM1`…）自动加 `_` 前缀、截断 120 字符。
+- **响应头**：手机页带 `Content-Security-Policy`（`default-src 'self'`，禁 iframe、禁外链）、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Permissions-Policy` 关闭摄像头/麦克风/定位；所有响应 `Cache-Control: no-store`。
+- **资源上限**：`maxConnections = 64`、`headersTimeout = 30s`、`requestTimeout = 30min`（慢速大文件可传完，但不会无限挂住）；截屏最小间隔 3 秒（防刷 PowerShell）。
+- **面板隔离**：`/file-station/api/*` 只在本机回环可用，并校验 `Host`/`Origin` 必须是 loopback；手机端无法访问面板接口。
+- **已知边界**：局域网 HTTP 明文，同一 WiFi 下有抓包能力的人可看到传输内容；需要更强保密时请用 VPN/热点隔离，或把访问码当成一次性凭证定期在面板里「重置访问码」。
 
 ## 开发笔记
 
