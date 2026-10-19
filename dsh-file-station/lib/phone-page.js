@@ -46,6 +46,13 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   .chat.pc{margin-right:auto;background:#171b22}
   .chat .ct{font-size:11px;color:#98a0ad;margin-bottom:3px}
   .chat .cb{font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:#e6e9ee}
+  .prebar{position:sticky;top:0;z-index:2;background:#171b22;padding:8px 0;margin-top:8px;
+          border-bottom:1px solid #242a34}
+  .pre{max-height:48vh;overflow:auto;-webkit-overflow-scrolling:touch;white-space:pre-wrap;
+       word-break:break-word;background:#0f1319;border:1px solid #2f3a49;border-radius:10px;
+       padding:9px;margin-top:8px;font-size:13px;line-height:1.55;color:#e6e9ee}
+  .pre::selection,.pre ::selection{background:#2c4373}
+  .tinytip{font-size:12px;margin-top:6px}
   .status.ok{color:#56d364}
   pre{white-space:pre-wrap;word-break:break-word;background:#0f1319;border:1px solid #2f3a49;
       border-radius:10px;padding:10px;max-height:46vh;overflow:auto;font-size:13px;margin:10px 0 0}
@@ -74,6 +81,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <div class="card">
   <h2>💬 和电脑对话</h2>
   <div class="list" id="l-chat"></div>
+  <div class="muted tinytip">点一条消息即可复制它的内容</div>
   <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
   <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
   <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
@@ -94,11 +102,14 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <div class="card">
   <h2>📄 电脑上的文字</h2>
   <div class="list" id="l-texts"></div>
-  <pre id="p-text" style="display:none"></pre>
-  <div class="row" style="margin-top:8px">
-    <button id="b-copy" style="display:none">📋 复制全文</button>
+  <!-- 操作条放在正文上方：长按选中后系统菜单通常弹在下方，不会盖住这两个按钮 -->
+  <div class="row prebar" id="p-actions" style="display:none">
+    <button class="primary" id="b-copy">📋 复制全文</button>
+    <button id="b-selall">全选</button>
     <span class="muted" id="s-text"></span>
   </div>
+  <pre id="p-text" class="pre" style="display:none"></pre>
+  <div class="muted tinytip" id="hint-text" style="display:none">点一下正文即可复制全文；长按可手动选择文字。</div>
 </div>
 
 <script>
@@ -207,6 +218,16 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       var body = document.createElement('div');
       body.className = 'cb';
       body.textContent = it.text || '';
+      body.addEventListener('click', function () {
+        var sel = '';
+        try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
+        if (sel.trim().length) return; // 正在选文字，不抢
+        copyText(it.text || '', function () {
+          var old = head.textContent;
+          head.textContent = old + ' · 已复制';
+          setTimeout(function () { head.textContent = old; }, 1500);
+        });
+      });
       d.appendChild(head);
       d.appendChild(body);
       box.appendChild(d);
@@ -311,10 +332,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
           fetch('/text' + qs('p=' + encodeURIComponent((r.parent ? r.parent + '/' : '') + it.n)))
             .then(function (x) { return x.text(); })
             .then(function (txt) {
-              var pre = $('p-text'); pre.textContent = txt; pre.style.display = 'block';
-              $('b-copy').style.display = 'inline-block';
-              $('b-copy').dataset.text = txt;
-              set('s-text', it.n);
+              showText(txt, it.n);
             });
         };
         list.appendChild(a);
@@ -325,19 +343,74 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       }
     }).catch(function () {});
   }
-  $('b-copy').onclick = function () {
-    var txt = $('b-copy').dataset.text || '';
-    function done() { set('s-text', '已复制', 'ok'); }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(txt).then(done, fallback);
-    } else fallback();
+
+  function showText(txt, label) {
+    var pre = $('p-text');
+    pre.textContent = txt;
+    pre.style.display = 'block';
+    $('p-actions').style.display = 'flex';
+    $('hint-text').style.display = 'block';
+    set('s-text', label || '', '');
+  }
+
+  function currentText() {
+    var pre = $('p-text');
+    return pre && pre.style.display !== 'none' ? (pre.textContent || '') : '';
+  }
+
+  function copyText(text, onOk, onFail) {
+    if (!text) { if (onFail) onFail(); return; }
     function fallback() {
       var ta = document.createElement('textarea');
-      ta.value = txt; document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); done(); } catch (e) { set('s-text', '复制失败，请长按选择', 'err'); }
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;height:1px;width:1px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ta.setSelectionRange(0, ta.value.length); } catch (e) {}
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
       document.body.removeChild(ta);
+      if (ok) { if (onOk) onOk(); } else if (onFail) onFail();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { if (onOk) onOk(); }, fallback);
+    } else fallback();
+  }
+
+  function copyFullText(txt) {
+    if (!txt) { set('s-text', '先点上面一个文件', 'err'); return; }
+    copyText(txt,
+      function () { set('s-text', '已复制全文', 'ok'); },
+      function () { set('s-text', '复制失败，请长按手动复制', 'err'); });
+  }
+
+  $('b-copy').onclick = function (ev) {
+    ev.preventDefault();
+    copyFullText(currentText());
+  };
+  $('b-selall').onclick = function (ev) {
+    ev.preventDefault();
+    var pre = $('p-text');
+    if (!pre || pre.style.display === 'none') { set('s-text', '先点上面一个文件', 'err'); return; }
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(pre);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      set('s-text', '已全选，可用系统菜单或上面的按钮复制', '');
+    } catch (e) {
+      set('s-text', '全选失败，请长按选择', 'err');
     }
   };
+  // 单击正文 = 复制全文；已经有选区时不抢（交给系统选择菜单）
+  $('p-text').addEventListener('click', function () {
+    var sel = '';
+    try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
+    if (sel.trim().length) return;
+    copyFullText(currentText());
+  });
 
   loadFiles('');
   loadTexts();
