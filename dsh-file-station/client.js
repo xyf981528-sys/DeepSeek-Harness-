@@ -59,6 +59,8 @@ window.__ModuleLoader__.load({
         security: '安全',
         secure: 'HttpOnly Cookie · 本机回环面板 · 按 IP 限流',
         locked: '访问码错误过多，已临时锁定',
+        wideWarn: '把 {p} 整块盘加进共享后，手机上能看到这个盘里的所有文件（数据目录和系统敏感目录除外）。确定要加吗？',
+        wideHint: '想让手机访问比工作目录更高的层级，可以直接填盘符，例如 D:\\ —— 会弹一次确认。',
         empty: '暂时没有内容',
         settings: '额外共享目录',
         settingsHint: '把电脑上其他文件夹加进来，手机就能浏览和下载（也可以把文件上传到共享目录）。',
@@ -122,6 +124,8 @@ window.__ModuleLoader__.load({
         security: 'Security',
         secure: 'HttpOnly cookie · loopback-only panel · per-IP throttling',
         locked: 'Too many wrong codes — temporarily locked',
+        wideWarn: 'Sharing the whole drive {p} lets the phone see every file on it (except the data folder and system-sensitive folders). Continue?',
+        wideHint: 'To reach above the working folder, enter a drive root such as D:\\ — you will be asked to confirm once.',
         empty: 'Nothing here yet',
         settings: 'Extra shared folders',
         settingsHint: 'Add other folders on this computer so the phone can browse and download them.',
@@ -437,10 +441,17 @@ window.__ModuleLoader__.load({
       const addDir = useCallback(() => {
         const next = dirInput.trim();
         if (!next) return;
+        // 整块盘会暴露该盘上的一切（除数据目录/系统敏感目录），加之前让用户确认一次
+        if (/^[a-zA-Z]:[\\/]?$/.test(next)) {
+          const ok = typeof window !== 'undefined' && window.confirm
+            ? window.confirm(t('wideWarn').replace('{p}', next))
+            : true;
+          if (!ok) return;
+        }
         const dirs = (status && status.extraDirs ? status.extraDirs : []).concat([next]);
         setDirInput('');
         act('set-share-dirs', { dirs });
-      }, [dirInput, status, act]);
+      }, [dirInput, status, act, t]);
 
       const removeDir = useCallback((dir) => {
         const dirs = (status && status.extraDirs ? status.extraDirs : []).filter((x) => x !== dir);
@@ -575,6 +586,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'fs-card-head' },
               h('div', { className: 'fs-card-title' }, t('settings'))),
             h('div', { className: 'fs-hint' }, t('settingsHint')),
+            h('div', { className: 'fs-hint' }, t('wideHint')),
             extras.length
               ? h('div', { className: 'fs-chips', style: { marginTop: 10 } }, extras.map((dir) => h('span', { className: 'fs-chip', key: dir },
                 h('span', { title: dir }, dir),

@@ -419,16 +419,19 @@ class FileStation {
     return clean;
   }
 
-  /** 额外共享目录的安全边界：系统目录、盘符根、UNC、以及数据目录及其祖先一律拒绝。 */
+  /**
+   * 额外共享目录的添加边界。
+   * 允许把整块盘（如 `D:\`）或用户主目录加进来——手机端需要能浏览到比工作目录更高的层级；
+   * 但仍拒绝系统目录、`.dsh`/`.ssh`/`AppData` 这些放密钥和 Cookie 的目录；
+   * 数据目录本身与这些敏感子树在请求时由 `isProtected()` 再兜一层。
+   */
   extraDirAllowed(real) {
     if (!real) return false;
-    if (real.startsWith('\\\\')) return false;
-    try { if (path.parse(real).root === real) return false; } catch { return false; }
+    if (real.startsWith('\\\\')) return false; // UNC 网络路径不支持
     const norm = (s) => String(s || '').toLowerCase().replace(/[\\/]+$/, '');
     const lower = norm(real);
     if (!lower) return false;
     const home = norm(process.env.USERPROFILE || 'C:\\Users\\K');
-    // 整个目录树都拒绝：系统目录、DSH 配置（含访问码）、SSH、AppData（浏览器 Cookie/令牌）
     const denyTrees = [
       process.env.SystemRoot || 'C:\\Windows',
       process.env.ProgramFiles || 'C:\\Program Files',
@@ -441,12 +444,43 @@ class FileStation {
     for (const d of denyTrees) {
       if (lower === d || lower.startsWith(d + '\\')) return false;
     }
-    // 用户主目录本身（只允许它的子目录，例如 Downloads、Desktop）
-    if (lower === home) return false;
     const data = norm(this.dataDir);
-    // 数据目录本身、以及包含数据目录的上级（会把访问码/日志一起暴露）都不允许
-    if (data && (lower === data || data.startsWith(lower + '\\'))) return false;
+    // 数据目录本身不给加；但它的上级（例如 D:\）可以，靠 isProtected() 挡住宿主文件
+    if (data && lower === data) return false;
     return true;
+  }
+
+  /**
+   * 运行期硬保护（与共享根无关）：即使把整块盘加进共享，这些子树也永远不返回给手机。
+   * 共享/上传目录本身在数据目录下面，单独放行。
+   */
+  isProtected(real) {
+    let target;
+    try { target = fs.realpathSync(real); } catch { return true; }
+    const norm = (s) => String(s || '').toLowerCase().replace(/[\\/]+$/, '');
+    const lower = norm(target);
+    if (!lower) return true;
+    const home = norm(process.env.USERPROFILE || 'C:\\Users\\K');
+    const trees = [
+      this.dataDir,
+      path.join(home, '.dsh'),
+      path.join(home, '.ssh'),
+      path.join(home, 'appdata'),
+      process.env.SystemRoot || 'C:\\Windows',
+      process.env.ProgramFiles || 'C:\\Program Files',
+      process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+      process.env.ProgramData || 'C:\\ProgramData',
+    ].map(norm).filter(Boolean);
+    for (const d of trees) {
+      if (lower === d || lower.startsWith(d + '\\')) {
+        const share = norm(this.shareDir);
+        const up = norm(this.uploadDir);
+        if (share && (lower === share || lower.startsWith(share + '\\'))) return false;
+        if (up && (lower === up || lower.startsWith(up + '\\'))) return false;
+        return true;
+      }
+    }
+    return false;
   }
 
   roots() {
@@ -460,6 +494,7 @@ class FileStation {
   inRoots(target) {
     let real;
     try { real = fs.realpathSync(target); } catch { return false; }
+    if (this.isProtected(real)) return false;
     for (const root of this.roots()) {
       if (real === root) return true;
       if (real.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) return true;
@@ -806,6 +841,7 @@ class FileStation {
         return this.safeJson(res, 200, { ok: true, items: this.inboxList(30) });
       }
       if (req.method === 'GET' && route === '/files') return this.handleFiles(res, url);
+      if (req.method === 'GET' && route === '/roots') return this.handleRoots(res);
       if (req.method === 'GET' && route === '/texts') return this.handleTexts(res);
       if (req.method === 'GET' && route === '/text') return this.handleTextRaw(res, url);
       if (req.method === 'GET' && route === '/shot.png') return this.handleShotImage(res);
@@ -831,6 +867,8 @@ class FileStation {
     for (const entry of fs.readdirSync(real, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       const full = path.join(real, entry.name);
+      // 共享整块盘时，列表里也不显示受保护目录（数据目录、.ssh、AppData…）
+      if (entry.isDirectory() && this.isProtected(full)) continue;
       let st;
       try { st = fs.statSync(full); } catch { continue; }
       const d = new Date(st.mtimeMs);
@@ -866,6 +904,21 @@ class FileStation {
     if (result.body.ok === false) return this.safeJson(res, result.status, result.body);
     this.safeJson(res, 200, result.body);
     return undefined;
+  }
+
+  /** 手机端可切换的根目录：共享、上传、以及面板里加的额外共享目录。 */
+  handleRoots(res) {
+    const roots = [
+      { v: '', name: '共享文件夹', kind: 'share' },
+      { v: V_UPLOAD, name: '上传文件夹', kind: 'upload' },
+      ...this.extraDirs.map((d, i) => ({
+        v: '__x__/' + i,
+        name: path.basename(d) || d,
+        path: d,
+        kind: 'extra',
+      })),
+    ];
+    return this.safeJson(res, 200, { ok: true, roots });
   }
 
   handleTexts(res) {

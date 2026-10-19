@@ -25,10 +25,11 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 
 1. 打开侧边栏「文件传输台」，复制面板里的手机地址。
 2. 手机连同一个 WiFi，用浏览器打开该地址（末尾带 `?k=访问码`，服务端会把它换成 HttpOnly Cookie 并跳到 `/`，下次不用再带）。
-3. 手机页面：📷 截屏、⬆ 上传、💬 和电脑对话、⬇ 浏览下载、📄 看文字。
+3. 手机页面：📷 截屏、⬆ 上传、💬 和电脑对话、⬇ 浏览下载、📄 看文字（深色卡片界面，适配刘海屏/安全区）。
 4. **文字/留言是双向的**：手机和电脑共用一条对话流——面板里直接显示手机发来的文字，也能在输入框写一句点「发送」推到手机；手机页每 4 秒刷新，电脑发的话以左侧气泡出现。
 5. **发文字默认不生成文件**：勾选「同时存成 txt 文件」才会在 `共享\` 里写 `文本-*.txt`（老行为）；勾选「让电脑弹窗提醒」则额外在电脑上响铃弹窗（相当于原「留言」）。
 6. **手机上复制文字**：对话里点一条消息即可复制；「电脑上的文字」点一下正文也能复制全文。「📋 复制全文 / 全选」按钮放在正文**上方**（正文限高、内部滚动），长按全选时系统菜单不会盖住按钮。
+7. **想访问工作目录之外的盘**：面板「额外共享目录」里直接填盘符，例如 `D:\`（会弹一次确认），手机就能从盘符根往下浏览、下载；数据目录、`.ssh`、`AppData`、`C:\Windows` 等敏感位置始终不会出现在列表里，也访问不到。
 
 ## 数据位置
 
@@ -80,7 +81,7 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 - **全局熔断**：10 分钟内累计 120 次失败，整个服务锁 10 分钟（防分布式猜码）。
 - **跨站防护**：写操作（POST）校验 `Origin` 必须与本机同源、`Sec-Fetch-Site: cross-site` 直接 403；Cookie 本身 `SameSite=Lax`。
 - **路径白名单**：`realpath` 后再按根目录比较（不是 `startsWith` 字符串），`..\` 与符号链接逃逸都会 403。
-- **额外共享目录有安全边界**：拒绝盘符根、UNC 路径、`C:\Windows`、Program Files、ProgramData、用户主目录本身、`AppData`、`.dsh`、`.ssh`，以及数据目录本身/包含数据目录的上级（否则访问码会通过共享目录泄露）；最多 20 个。
+- **额外共享目录的边界分两层**：添加时拒绝 UNC 路径、`C:\Windows`、Program Files、ProgramData、`AppData`、`.dsh`、`.ssh` 和数据目录本身（整块盘如 `D:\` 允许，面板会先弹确认）；请求时 `isProtected()` 再兜一层——即使整块盘都在共享里，数据目录（访问码/日志/对话）、`.dsh`、`.ssh`、`AppData`、系统目录也不会被列出或下载。最多 20 个额外目录。
 - **`/text` 只读文本**：仅允许 `.txt/.md/.log/.json/.csv/.yml/...` 等扩展名，隐藏文件（`.env`、`.git` 里的东西）与超过 200 KB 的文件一律拒绝——令牌泄露也不能把它当任意读文件接口。
 - **上传限制**：必须带 `Content-Length`、单文件 ≤ 8 GB、磁盘保留 200 MB 余量、文件名过滤控制字符与 `\/:*?"<>|`、Windows 保留名（`CON`/`PRN`/`COM1`…）自动加 `_` 前缀、截断 120 字符。
 - **响应头**：手机页带 `Content-Security-Policy`（`default-src 'self'`，禁 iframe、禁外链）、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Permissions-Policy` 关闭摄像头/麦克风/定位；所有响应 `Cache-Control: no-store`。

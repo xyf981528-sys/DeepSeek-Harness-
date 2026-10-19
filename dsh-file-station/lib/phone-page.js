@@ -1,5 +1,5 @@
-// 手机端单页（移植自 文件传输台 v1.2 的 PAGE）
-// 纯静态 HTML + 原生 JS，无外部依赖；所有接口都带 ?k= 访问码。
+// 手机端单页（移植自 文件传输台 v1.2 的 PAGE，DSH 插件版做了重新设计）
+// 纯静态 HTML + 原生 JS，无外部依赖；访问码由服务端写成 HttpOnly Cookie。
 
 export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   return `<!doctype html>
@@ -7,109 +7,143 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0e1116">
+<meta name="theme-color" content="#0a0e13">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex,nofollow">
 <title>${escapeHtml(title)}</title>
 <style>
+  :root{
+    --bg:#0a0e13; --bg2:#0f141b; --card:#141a22; --card2:#182029; --line:#222c38;
+    --text:#e9eef6; --muted:#8c99ab; --brand:#4c8dff; --ok:#46d17f; --err:#ff7b72;
+  }
   *{box-sizing:border-box}
-  body{margin:0;padding:14px 14px 40px;background:#0e1116;color:#e6e9ee;
-       font:15px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif}
-  h1{font-size:18px;margin:2px 0 14px;font-weight:600;letter-spacing:.02em}
-  .card{background:#171b22;border:1px solid #242a34;border-radius:14px;padding:14px;margin:0 0 12px}
-  .card h2{font-size:15px;margin:0 0 10px;font-weight:600}
-  .muted{color:#98a0ad;font-size:13px}
-  button{font:inherit;border:1px solid #2f3a49;background:#222a35;color:#e6e9ee;
-         border-radius:10px;padding:9px 13px;cursor:pointer}
-  button:active{background:#2c3644}
-  button.primary{background:#4c8dff;border-color:#4c8dff;color:#08111f;font-weight:600}
-  button:disabled{opacity:.5}
-  textarea{width:100%;min-height:74px;resize:vertical;background:#0f1319;color:#e6e9ee;
-           border:1px solid #2f3a49;border-radius:10px;padding:9px;font:inherit}
-  input[type=file]{width:100%;color:#98a0ad;font-size:13px}
-  progress{width:100%;height:8px;margin-top:8px;accent-color:#4c8dff}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .list{margin-top:10px;display:flex;flex-direction:column;gap:2px}
-  .item{display:flex;gap:8px;align-items:center;padding:8px 6px;border-radius:9px;
-        overflow:hidden;text-decoration:none;color:inherit}
-  .item:active{background:#1d232c}
-  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .item .meta{color:#98a0ad;font-size:12px;white-space:nowrap}
-  .status{margin-top:8px;font-size:13px;color:#98a0ad;word-break:break-all}
-  .status.err{color:#ff7b72}
-  .opt{display:flex;gap:7px;align-items:center;margin-top:9px;font-size:13px;color:#98a0ad}
-  .opt input{accent-color:#4c8dff}
-  .sent{padding:7px 0;border-top:1px solid #242a34;font-size:13px;white-space:pre-wrap;word-break:break-word}
-  .sent .t{color:#98a0ad;font-size:12px;margin-right:6px}
-  .sent .badge{color:#7ee2a8;font-size:11px;margin-left:6px}
-  #l-chat{max-height:320px;overflow:auto;gap:8px}
-  .chat{max-width:88%;padding:8px 10px;border-radius:12px;border:1px solid #242a34;background:#171b22}
-  .chat.me{margin-left:auto;background:#1b2740;border-color:#2c4373}
-  .chat.pc{margin-right:auto;background:#171b22}
-  .chat .ct{font-size:11px;color:#98a0ad;margin-bottom:3px}
-  .chat .cb{font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:#e6e9ee}
-  .prebar{position:sticky;top:0;z-index:2;background:#171b22;padding:8px 0;margin-top:8px;
-          border-bottom:1px solid #242a34}
-  .pre{max-height:48vh;overflow:auto;-webkit-overflow-scrolling:touch;white-space:pre-wrap;
-       word-break:break-word;background:#0f1319;border:1px solid #2f3a49;border-radius:10px;
-       padding:9px;margin-top:8px;font-size:13px;line-height:1.55;color:#e6e9ee}
-  .pre::selection,.pre ::selection{background:#2c4373}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;padding:0 12px calc(26px + env(safe-area-inset-bottom));color:var(--text);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+       background:radial-gradient(1200px 560px at 50% -200px,#17253c 0%,rgba(10,14,19,0) 65%),#0a0e13;
+       background-attachment:fixed}
+  .wrap{max-width:680px;margin:0 auto}
+  .top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
+       padding:calc(10px + env(safe-area-inset-top)) 2px 10px;
+       background:linear-gradient(180deg,#0a0e13 62%,rgba(10,14,19,.72));
+       backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  .logo{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:17px;
+        background:linear-gradient(150deg,#2a5bd7,#4c8dff);box-shadow:0 6px 18px rgba(76,141,255,.35)}
+  .top h1{flex:1;margin:0;font-size:17px;font-weight:650;letter-spacing:.01em}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#c7daff;white-space:nowrap;
+        background:rgba(76,141,255,.12);border:1px solid rgba(76,141,255,.32);padding:4px 9px;border-radius:999px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(70,209,127,.15)}
+  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);
+        border-radius:16px;padding:14px;margin:0 0 12px;box-shadow:0 10px 26px rgba(0,0,0,.26)}
+  .card h2{display:flex;align-items:center;gap:9px;font-size:14.5px;font-weight:640;margin:0 0 11px}
+  .card h2 .ico{width:27px;height:27px;border-radius:9px;display:grid;place-items:center;font-size:14px;
+        background:rgba(76,141,255,.13);border:1px solid rgba(76,141,255,.24)}
+  .muted{color:var(--muted);font-size:13px}
   .tinytip{font-size:12px;margin-top:6px}
-  .status.ok{color:#56d364}
-  pre{white-space:pre-wrap;word-break:break-word;background:#0f1319;border:1px solid #2f3a49;
-      border-radius:10px;padding:10px;max-height:46vh;overflow:auto;font-size:13px;margin:10px 0 0}
-  img.shot{width:100%;border-radius:10px;border:1px solid #2f3a49;margin-top:10px;display:block}
-  .msg{border-top:1px solid #242a34;padding:7px 0;font-size:13px}
-  .msg:first-child{border-top:0}
-  .msg .t{color:#98a0ad;font-size:12px;margin-right:6px}
+  button{font:inherit;min-height:38px;border:1px solid var(--line);background:#1d2632;color:var(--text);
+         border-radius:11px;padding:8px 14px;cursor:pointer;
+         transition:transform .08s ease,background .15s ease}
+  button:active{transform:scale(.97);background:#26313f}
+  button.primary{background:linear-gradient(180deg,#5b97ff,#3f7ff0);border-color:#5b97ff;color:#07101f;
+         font-weight:650;box-shadow:0 5px 16px rgba(76,141,255,.26)}
+  button:disabled{opacity:.45;box-shadow:none}
+  textarea{width:100%;min-height:78px;resize:vertical;background:var(--bg2);color:var(--text);
+           border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;outline:none;
+           transition:border-color .15s,box-shadow .15s}
+  textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(76,141,255,.14)}
+  input[type=file]{width:100%;color:var(--muted);font-size:13px;padding:9px;background:var(--bg2);
+           border:1px dashed #2f3d4f;border-radius:12px}
+  progress{width:100%;height:8px;margin-top:10px;border:0;border-radius:999px;overflow:hidden;background:#1a2330}
+  progress::-webkit-progress-bar{background:#1a2330}
+  progress::-webkit-progress-value{background:linear-gradient(90deg,#4c8dff,#8ab6ff);border-radius:999px}
+  progress::-moz-progress-bar{background:#4c8dff}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px}
+  .list{margin-top:10px;display:flex;flex-direction:column;gap:3px}
+  .item{display:flex;gap:9px;align-items:center;padding:9px 8px;border-radius:11px;overflow:hidden;
+        text-decoration:none;color:inherit;transition:background .12s}
+  .item:active{background:#1b2430}
+  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  .item .meta{color:var(--muted);font-size:11.5px;white-space:nowrap}
+  .status{margin-top:8px;font-size:12.5px;color:var(--muted);word-break:break-all}
+  .status.ok{color:var(--ok)}
+  .status.err{color:var(--err)}
+  .opt{display:flex;gap:8px;align-items:center;margin-top:9px;font-size:13px;color:var(--muted)}
+  .opt input{accent-color:var(--brand);width:17px;height:17px}
+  #l-chat{max-height:340px;overflow:auto;gap:9px;padding-bottom:2px}
+  .chat{max-width:86%;padding:8px 11px;border-radius:14px;border:1px solid var(--line);background:#111722}
+  .chat.me{margin-left:auto;background:linear-gradient(180deg,#1d2c4d,#182540);
+           border-color:#2c4373;border-bottom-right-radius:5px}
+  .chat.pc{margin-right:auto;border-bottom-left-radius:5px}
+  .chat .ct{font-size:11px;color:var(--muted);margin-bottom:3px}
+  .chat .cb{font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .prebar{position:sticky;top:calc(56px + env(safe-area-inset-top));z-index:5;background:var(--card);
+          padding:8px 0;margin-top:8px;border-bottom:1px solid var(--line)}
+  .pre{max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;white-space:pre-wrap;
+       word-break:break-word;background:var(--bg2);border:1px solid #2f3d4f;border-radius:12px;
+       padding:10px;margin-top:8px;font-size:13px;line-height:1.55;color:var(--text)}
+  .pre::selection,.pre ::selection{background:#2c4373}
+  img.shot{width:100%;border-radius:12px;border:1px solid #2f3d4f;margin-top:10px;display:block;
+           box-shadow:0 8px 20px rgba(0,0,0,.3)}
+  #d-path{display:inline-block;margin-top:9px;padding:4px 9px;border-radius:999px;background:#111a24;
+          border:1px solid var(--line);color:var(--muted);font-size:12px;word-break:break-all}
+  #d-path:empty{display:none}
+  .foot{text-align:center;color:#5d6879;font-size:11.5px;margin:4px 0 8px}
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
 </style>
 </head>
 <body>
-<h1>${escapeHtml(title)}</h1>
+<div class="wrap">
 
-<div class="card">
-  <h2>📷 电脑截屏</h2>
-  <div class="row"><button class="primary" id="b-shot">截一张给我看</button><span class="muted" id="s-shot"></span></div>
-  <img class="shot" id="img-shot" alt="" style="display:none">
-</div>
-
-<div class="card">
-  <h2>⬆ 上传文件到电脑</h2>
-  <input type="file" id="f-up" multiple>
-  <div class="row" style="margin-top:8px"><button class="primary" id="b-up">开始上传</button><span class="muted" id="s-up"></span></div>
-  <progress id="p-up" value="0" max="100" style="display:none"></progress>
-</div>
-
-<div class="card">
-  <h2>💬 和电脑对话</h2>
-  <div class="list" id="l-chat"></div>
-  <div class="muted tinytip">点一条消息即可复制它的内容</div>
-  <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
-  <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
-  <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
-  <div class="row" style="margin-top:8px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
-  <div class="list" id="l-sent"></div>
-</div>
-
-<div class="card">
-  <h2>⬇ 电脑上的文件</h2>
-  <div class="row">
-    <button id="b-share">共享文件夹</button>
-    <button id="b-upload">上传文件夹</button>
+  <div class="top">
+    <div class="logo">📡</div>
+    <h1>${escapeHtml(title)}</h1>
+    <span class="pill"><span class="dot"></span>已连接</span>
   </div>
-  <div class="list" id="l-files"></div>
-  <div id="d-path" class="muted" style="margin-top:8px"></div>
-</div>
 
-<div class="card">
-  <h2>📄 电脑上的文字</h2>
-  <div class="list" id="l-texts"></div>
-  <!-- 操作条放在正文上方：长按选中后系统菜单通常弹在下方，不会盖住这两个按钮 -->
-  <div class="row prebar" id="p-actions" style="display:none">
-    <button class="primary" id="b-copy">📋 复制全文</button>
-    <button id="b-selall">全选</button>
-    <span class="muted" id="s-text"></span>
+  <div class="card">
+    <h2><span class="ico">📷</span>电脑截屏</h2>
+    <div class="row"><button class="primary" id="b-shot">截一张给我看</button><span class="muted" id="s-shot"></span></div>
+    <img class="shot" id="img-shot" alt="" style="display:none">
   </div>
-  <pre id="p-text" class="pre" style="display:none"></pre>
-  <div class="muted tinytip" id="hint-text" style="display:none">点一下正文即可复制全文；长按可手动选择文字。</div>
+
+  <div class="card">
+    <h2><span class="ico">⬆</span>上传文件到电脑</h2>
+    <input type="file" id="f-up" multiple>
+    <div class="row" style="margin-top:10px"><button class="primary" id="b-up">开始上传</button><span class="muted" id="s-up"></span></div>
+    <progress id="p-up" value="0" max="100" style="display:none"></progress>
+  </div>
+
+  <div class="card">
+    <h2><span class="ico">💬</span>和电脑对话</h2>
+    <div class="list" id="l-chat"></div>
+    <div class="muted tinytip">点一条消息即可复制它的内容</div>
+    <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
+    <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
+    <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
+    <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="ico">⬇</span>电脑上的文件</h2>
+    <div class="row" id="b-roots"></div>
+    <div class="list" id="l-files"></div>
+    <div id="d-path"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="ico">📄</span>电脑上的文字</h2>
+    <div class="list" id="l-texts"></div>
+    <!-- 操作条放在正文上方：长按选中后系统菜单通常弹在下方，不会盖住这两个按钮 -->
+    <div class="row prebar" id="p-actions" style="display:none">
+      <button class="primary" id="b-copy">📋 复制全文</button>
+      <button id="b-selall">全选</button>
+      <span class="muted" id="s-text"></span>
+    </div>
+    <pre id="p-text" class="pre" style="display:none"></pre>
+    <div class="muted tinytip" id="hint-text" style="display:none">点一下正文即可复制全文；长按可手动选择文字。</div>
+  </div>
+
+  <div class="foot">同一 WiFi 直连电脑 · 不经过云端</div>
 </div>
 
 <script>
@@ -263,6 +297,36 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
   // ---- 文件浏览 ----
   var currentDir = '';
+  var rootsCache = [];
+
+  function prettyPath(p) {
+    if (!p) return '共享文件夹';
+    if (p === '__upload__') return '上传文件夹';
+    var m = /^__x__\/(\d+)(?:\/(.*))?$/.exec(p);
+    if (m) {
+      var r = rootsCache[Number(m[1])];
+      var label = r ? r.name : '额外目录';
+      return label + (m[2] ? ' / ' + m[2].split('/').join(' / ') : '');
+    }
+    return p;
+  }
+
+  function loadRoots() {
+    return fetch('/roots' + qs()).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok) return;
+      rootsCache = r.roots || [];
+      var box = $('b-roots');
+      if (!box) return;
+      box.textContent = '';
+      rootsCache.forEach(function (root) {
+        var b = document.createElement('button');
+        b.textContent = (root.kind === 'extra' ? '📂 ' : '') + root.name;
+        if (root.kind === 'share') b.className = 'primary';
+        b.onclick = function () { loadFiles(root.v); };
+        box.appendChild(b);
+      });
+    }).catch(function () {});
+  }
   function rowFor(it, base) {
     var a = document.createElement('a');
     a.className = 'item';
@@ -287,7 +351,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       .then(function (r) {
         if (!r.ok) { set('d-path', r.error || '无法读取目录', 'err'); return; }
         currentDir = r.p || '';
-        $('d-path').textContent = currentDir || '';
+        $('d-path').textContent = prettyPath(currentDir);
         if (r.parent !== undefined && r.parent !== null && r.parent !== '') {
           var up = document.createElement('a');
           up.className = 'item'; up.href = '/files' + qs('p=' + encodeURIComponent(r.parent));
@@ -312,8 +376,6 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       })
       .catch(function () { set('d-path', '网络错误', 'err'); });
   }
-  $('b-share').onclick = function () { loadFiles(''); };
-  $('b-upload').onclick = function () { loadFiles('__upload__'); };
 
   // ---- 电脑上的文字 ----
   function loadTexts() {
@@ -412,10 +474,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     copyFullText(currentText());
   });
 
+  loadRoots();
   loadFiles('');
   loadTexts();
   loadChat();
   setInterval(function () { loadChat(); }, 4000);
+  setInterval(function () { loadRoots(); }, 20000);
 })();
 </script>
 </body>
