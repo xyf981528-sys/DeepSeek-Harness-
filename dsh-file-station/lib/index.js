@@ -386,7 +386,12 @@ class FileStation {
       const raw = fs.readFileSync(this.extraFile, 'utf8');
       for (const line of raw.split(/\r?\n/)) {
         const p = line.trim();
-        if (p && !p.startsWith('#')) this.extraDirs.push(p);
+        if (!p || p.startsWith('#')) continue;
+        let real;
+        try { real = fs.realpathSync(p); } catch { continue; }
+        // 手改配置文件也要过同一套边界检查，避免绕过面板白名单
+        if (this.extraDirAllowed(real)) this.extraDirs.push(real);
+        else this.log('EXTRA: 忽略不安全的目录 ' + real);
       }
     } catch { /* 没有额外目录 */ }
   }
