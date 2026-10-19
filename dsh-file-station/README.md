@@ -11,7 +11,15 @@
 
 ## 安装
 
-插件管理器 → 安装本地包 → 选这个目录（或在 DSH 里执行 `plugin_manager` 的 `install_bundle`，target 为绝对路径）。装完刷新 Web GUI，侧边栏会多一个「文件传输台」图标。
+两种方式等价，都会把包写进 profile 的 `dsh.profile.bundles`（实测过）：
+
+```powershell
+dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
+```
+
+或者：DSH 插件管理器 → 安装本地包 → 选这个目录（等价于 `plugin_manager` 的 `install_bundle`，target 为绝对路径）。
+
+装完重启 DSH / 刷新 Web GUI，侧边栏会多一个「文件传输台」图标。已验证装好后 profile 里是 junction 链接（改源码即生效），Host 代码改动仍需重启 DSH 才加载。
 
 ## 使用
 
