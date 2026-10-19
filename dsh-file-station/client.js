@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
         sendPlaceholder: '写一句发到手机…',
         sendToPhone: '发送',
         sentToPhone: '已发到手机',
+        uploadDone: '文件已传完：{n}（{s}）',
         needText: '先写点内容',
         security: '安全',
         secure: 'HttpOnly Cookie · 本机回环面板 · 按 IP 限流',
@@ -120,6 +121,7 @@ window.__ModuleLoader__.load({
         sendPlaceholder: 'Write something to the phone…',
         sendToPhone: 'Send',
         sentToPhone: 'Sent to the phone',
+        uploadDone: 'File received: {n} ({s})',
         needText: 'Type something first',
         security: 'Security',
         secure: 'HttpOnly cookie · loopback-only panel · per-IP throttling',
@@ -244,7 +246,11 @@ window.__ModuleLoader__.load({
 .fs-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px;
   color: var(--dsw-alias-label-secondary); margin-top: 12px; }
 .fs-meta code { font-family: ui-monospace, Consolas, monospace; color: var(--dsw-alias-label-primary); }
-.fs-toast { font-size: 12px; color: var(--dsw-alias-state-success-primary); }
+.fs-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
+  font-size: 12.5px; padding: 9px 15px; border-radius: 999px; white-space: nowrap;
+  color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l2); box-shadow: 0 8px 22px rgba(0, 0, 0, .3);
+  pointer-events: none; }
 .fs-toast.err { color: var(--dsw-alias-state-error-primary); }
 .fs-warn { font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
 `;
@@ -333,12 +339,17 @@ window.__ModuleLoader__.load({
       const [dirInput, setDirInput] = useState('');
       const [draft, setDraft] = useState('');
       const toastTimer = useRef(0);
+      const seenUpload = useRef(0);
+      const sayRef = useRef(null);
+      const tRef = useRef(null);
 
       const say = useCallback((text, ok = true) => {
         setToast({ text, ok });
         clearTimeout(toastTimer.current);
         toastTimer.current = setTimeout(() => setToast(null), 3200);
       }, []);
+      sayRef.current = say;
+      tRef.current = t;
 
       const load = useCallback(async () => {
         try {
@@ -350,6 +361,13 @@ window.__ModuleLoader__.load({
           const box = await inboxRes.json().catch(() => null);
           if (data && data.ok) {
             setStatus(data);
+            // 手机传完一个文件 → 面板冒一条提示（靠 lastUpload 的时间戳判重）
+            const up = data.lastUpload;
+            if (up && up.at && up.at !== seenUpload.current) {
+              seenUpload.current = up.at;
+              const tt = tRef.current || ((k) => k);
+              sayRef.current(tt('uploadDone').replace('{n}', up.name).replace('{s}', fmtSize(up.size)), true);
+            }
             setFailed(false);
           } else setFailed(true);
           if (box && box.ok && Array.isArray(box.items)) setInbox(box.items);

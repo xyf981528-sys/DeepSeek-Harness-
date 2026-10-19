@@ -88,6 +88,15 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
           border:1px solid var(--line);color:var(--muted);font-size:12px;word-break:break-all}
   #d-path:empty{display:none}
   .foot{text-align:center;color:#5d6879;font-size:11.5px;margin:4px 0 8px}
+  .toastwrap{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom));
+       z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;
+       width:max-content;max-width:92vw}
+  .toast{background:rgba(24,32,44,.96);border:1px solid #2f3d4f;color:var(--text);font-size:13px;
+       padding:9px 14px;border-radius:999px;box-shadow:0 10px 26px rgba(0,0,0,.42);
+       animation:toastin .18s ease-out;max-width:92vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .toast.ok{border-color:rgba(70,209,127,.5);color:#b8f5d0}
+  .toast.err{border-color:rgba(255,123,114,.55);color:#ffc9c4}
+  @keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
 </style>
 </head>
@@ -145,6 +154,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
   <div class="foot">同一 WiFi 直连电脑 · 不经过云端</div>
 </div>
+<div class="toastwrap" id="toastwrap"></div>
 
 <script>
 (function () {
@@ -172,6 +182,20 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       body: JSON.stringify(body),
     }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
   }
+  // 轻提示：传输完成/失败都在屏幕下方冒一条，不打断操作
+  function toast(text, kind) {
+    var box = $('toastwrap');
+    if (!box) return;
+    var el = document.createElement('div');
+    el.className = 'toast' + (kind ? ' ' + kind : '');
+    el.textContent = text;
+    box.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = '0';
+      el.style.transition = 'opacity .2s ease';
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+    }, 2600);
+  }
   // ---- 截屏 ----
   $('b-shot').onclick = function () {
     var b = $('b-shot'); b.disabled = true; set('s-shot', '正在截屏…');
@@ -196,6 +220,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     function next() {
       if (i >= files.length) {
         set('s-up', '全部上传完成：' + totalBytes.toFixed(1) + ' MB', 'ok');
+        toast('✅ 全部 ' + files.length + ' 个文件已传完（' + totalBytes.toFixed(1) + ' MB）', 'ok');
         $('f-up').value = '';
         bar.style.display = 'none';
         loadFiles(currentDir);
@@ -218,9 +243,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
         var r = null;
         try { r = JSON.parse(xhr.responseText); } catch (e) {}
         if (xhr.status === 200 && r && r.ok) {
-          totalBytes += f.size / 1048576; i++; next();
+          totalBytes += f.size / 1048576; i++;
+          toast('✅ ' + f.name + ' 已传完', 'ok');
+          next();
         } else {
           set('s-up', f.name + ' 上传失败：' + ((r && r.error) || ('HTTP ' + xhr.status)), 'err');
+          toast('❌ ' + f.name + ' 上传失败', 'err');
           bar.style.display = 'none';
           $('b-up').disabled = false;
         }
@@ -302,7 +330,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   function prettyPath(p) {
     if (!p) return '共享文件夹';
     if (p === '__upload__') return '上传文件夹';
-    var m = /^__x__\/(\d+)(?:\/(.*))?$/.exec(p);
+    var m = /^__x__\\/(\\d+)(?:\\/(.*))?$/.exec(p);
     if (m) {
       var r = rootsCache[Number(m[1])];
       var label = r ? r.name : '额外目录';
@@ -341,6 +369,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     meta.className = 'meta';
     meta.textContent = it.dir ? '' : fmt(it.sz) + ' · ' + it.t;
     a.appendChild(nm); a.appendChild(meta);
+    // 下载由浏览器接管，这里给一个"开始下载"的反馈
+    if (!it.dir) {
+      a.addEventListener('click', function () { toast('⬇ 开始下载：' + it.n); });
+    }
     return a;
   }
   function loadFiles(dir) {

@@ -248,6 +248,7 @@ class FileStation {
         this.server = server;
         this.port = port;
         this.startedAt = Date.now();
+    this.lastUpload = null;
         this.log('=== 启动 === port=' + port + ' lan=' + this.lanUrl());
       };
       const onError = (err) => {
@@ -1099,7 +1100,9 @@ class FileStation {
       return this.safeJson(res, 500, { ok: false, error: '保存失败：' + String(err && err.message || err) });
     }
     this.log('上传 ' + path.basename(finalPath) + ' (' + total + ' B)');
-    return this.safeJson(res, 200, { ok: true, saved: finalPath });
+    // 面板靠轮询 status 知道"手机传完了"，所以把最近一次上传记在状态里
+    this.lastUpload = { name: path.basename(finalPath), size: total, t: this.stamp(), at: Date.now() };
+    return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size: total });
   }
 
   async handleTextPost(req, res) {
@@ -1320,6 +1323,7 @@ class FileStation {
       uploadDir: this.uploadDir,
       extraDirs: this.extraDirs,
       uploads: recent(this.uploadDir),
+      lastUpload: this.lastUpload || null,
       texts: recent(this.shareDir).filter((x) => x.n.toLowerCase().endsWith('.txt')),
       queue,
       inboxCount: this.inboxCount(),
