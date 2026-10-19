@@ -86,6 +86,23 @@ misc/remote-dsh.py  作者自用的变体：额外带「交给 DSH」任务队�
 6. **`DENY` 黑名单挡不住变体**：`Set-ExecutionPolicy Bypass`、`schtasks /create`、`[IO.File]::Delete()`、`wmic ... call uninstall` 都能绕过。黑名单天生只能兜底，真做安全得改成「白名单闸门 + 黑名单兜底」两层。
 7. **`Start-Process -ArgumentList` 不会自动给路径加引号**：带空格的路径会被拆成两个参数，报 `can't find '__main__' module in 'D:\DeepSeek'`（用 `'"' + $path + '"'` 包起来）。
 
+## 同仓库的第二个项目：DSH 插件版
+
+[`dsh-file-station/`](dsh-file-station/) 是同一套「手机 ↔ 电脑传文件」能力的 **DeepSeek Harness 插件版本**：
+
+- 不再需要单独跑 exe：装成插件后，DSH 侧边栏多一个「文件传输台」整页面板（手机地址 + 二维码、复制地址、打开目录、立即截屏、重置访问码、最近上传/文字、留言列表、额外共享目录）
+- 手机端体验保持一致：一个局域网 HTTP 页面，扫码或打开 `http://<局域网IP>:19790/?k=<访问码>`，上传 / 下载（Range 断点续传）/ 发文字 / 截屏 / 留言
+- 数据全部放在插件目录下的 `data/`（D 盘），首次启动从旧目录**复制**迁移，不写 C 盘
+- 端口 19790（19777 留给独立 exe 版）
+
+安装：
+
+```powershell
+dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
+```
+
+装完重启 DSH / 刷新 Web GUI，侧边栏出现「文件传输台」。细节、配置项与踩坑见 [dsh-file-station/README.md](dsh-file-station/README.md)。
+
 ## License
 
 [MIT](LICENSE)

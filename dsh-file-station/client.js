@@ -1,0 +1,549 @@
+// dsh-file-station — GUI 半侧（Client 插件）
+//
+// 在侧边栏加一个「文件传输台」入口，并在主区域渲染整页面板：
+// 手机访问地址、文件夹快捷入口、截屏、访问码、最近上传/文字、手机留言。
+// 全部样式只用 --dsw-alias-* 主题变量，跟随明暗主题。
+
+window.__ModuleLoader__.load({
+  id: 'dsh-file-station',
+  factory(require) {
+    const React = require('react');
+    const h = React.createElement;
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    const NS = 'file-station';
+
+    const DICT = {
+      zh: {
+        title: '文件传输台',
+        subtitle: '同一 WiFi 下，手机浏览器直接收发电脑上的文件',
+        running: '运行中',
+        stopped: '未启动',
+        address: '手机访问地址',
+        addressHint: '手机和电脑连同一个 WiFi，用手机相机扫下面的二维码，或者直接打开这个地址。',
+        noLan: '没有检测到局域网 IP，请确认电脑已连接 WiFi 或网线。',
+        qrTitle: '扫码连接',
+        qrHint: '手机相机对准二维码，或微信扫一扫，同一 WiFi 下点开链接即可。',
+        qrAlt: '手机访问地址二维码',
+        copy: '复制地址',
+        copied: '地址已复制',
+        copyFail: '复制失败，请手动选中地址',
+        openLocal: '在本机打开',
+        openShare: '打开共享文件夹',
+        openUpload: '打开上传文件夹',
+        shot: '截一张屏',
+        shotBusy: '正在截屏…',
+        shotDone: '已截屏，可在下方预览',
+        shotFail: '截屏失败',
+        resetToken: '重置访问码',
+        resetWarn: '重置后旧地址立即失效，手机上需要重新打开新地址。',
+        resetDone: '访问码已重置，请用新地址重新打开手机端',
+        recentUploads: '最近收到的文件',
+        recentTexts: '共享文件夹里的文字',
+        messages: '手机留言',
+        clearQueue: '清空留言',
+        empty: '暂时没有内容',
+        settings: '额外共享目录',
+        settingsHint: '把电脑上其他文件夹加进来，手机就能浏览和下载（也可以把文件上传到共享目录）。',
+        add: '添加',
+        addPlaceholder: '粘贴一个文件夹的完整路径，例如 D:\\照片',
+        remove: '移除',
+        openData: '打开数据目录',
+        port: '端口',
+        dataDir: '数据目录',
+        refresh: '刷新',
+        loading: '加载中…',
+        error: '读取状态失败，插件可能未启动',
+        latestShot: '最近一次截图',
+        freeHint: '手机上传的文件会进「上传」目录；手机发来的文字和下载的文件在「共享」目录。',
+        netError: '网络错误，请稍后重试',
+        dirsUpdated: '共享目录已更新',
+        cleared: '留言已清空',
+      },
+      en: {
+        title: 'File Station',
+        subtitle: 'Send files between this computer and your phone on the same Wi-Fi',
+        running: 'Running',
+        stopped: 'Not running',
+        address: 'Phone address',
+        addressHint: 'Connect the phone to the same Wi-Fi, then scan the QR code below or open the address directly.',
+        noLan: 'No LAN IP detected. Make sure this computer is on Wi-Fi or Ethernet.',
+        qrTitle: 'Scan to connect',
+        qrHint: 'Point the phone camera at the QR code on the same Wi-Fi, then open the link.',
+        qrAlt: 'QR code of the phone address',
+        copy: 'Copy address',
+        copied: 'Address copied',
+        copyFail: 'Copy failed — select the address manually',
+        openLocal: 'Open here',
+        openShare: 'Open shared folder',
+        openUpload: 'Open upload folder',
+        shot: 'Take screenshot',
+        shotBusy: 'Capturing…',
+        shotDone: 'Screenshot captured',
+        shotFail: 'Screenshot failed',
+        resetToken: 'Reset access code',
+        resetWarn: 'The old address stops working immediately.',
+        resetDone: 'Access code reset — reopen the new address on the phone',
+        recentUploads: 'Recently received files',
+        recentTexts: 'Text files in the shared folder',
+        messages: 'Messages from phone',
+        clearQueue: 'Clear messages',
+        empty: 'Nothing here yet',
+        settings: 'Extra shared folders',
+        settingsHint: 'Add other folders on this computer so the phone can browse and download them.',
+        add: 'Add',
+        addPlaceholder: 'Paste a full folder path, e.g. D:\\Photos',
+        remove: 'Remove',
+        openData: 'Open data folder',
+        port: 'Port',
+        dataDir: 'Data folder',
+        refresh: 'Refresh',
+        loading: 'Loading…',
+        error: 'Could not read status — is the plugin running?',
+        latestShot: 'Latest screenshot',
+        freeHint: 'Phone uploads land in "uploads"; texts and shared files live in "shared".',
+        netError: 'Network error, try again',
+        dirsUpdated: 'Shared folders updated',
+        cleared: 'Messages cleared',
+      },
+    };
+
+    function useT(ctx) {
+      const locale = ctx.get('locale');
+      const [lang, setLang] = useState(() => (locale ? locale.getSnapshot().active : 'zh'));
+      useEffect(() => {
+        if (!locale) return undefined;
+        return locale.subscribe(() => setLang(locale.getSnapshot().active));
+      }, []);
+      const pack = DICT[String(lang || 'zh').split('-')[0]] || DICT.zh;
+      return (key) => (pack[key] !== undefined ? pack[key] : (DICT.zh[key] !== undefined ? DICT.zh[key] : key));
+    }
+
+    const CSS = `
+.fs-root { height: 100%; overflow: auto; box-sizing: border-box; padding: 28px 32px 64px; }
+.fs-inner { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.fs-head { display: flex; align-items: center; gap: 12px; }
+.fs-head-icon { width: 34px; height: 34px; flex: none; color: var(--dsw-alias-brand-primary); }
+.fs-title { font-size: 20px; font-weight: 600; color: var(--dsw-alias-label-primary); line-height: 1.2; }
+.fs-sub { font-size: 13px; color: var(--dsw-alias-label-secondary); margin-top: 4px; }
+.fs-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; border: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-1); white-space: nowrap; }
+.fs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary); }
+.fs-dot.on { background: var(--dsw-alias-state-success-primary); }
+.fs-card { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px; padding: 16px; }
+.fs-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.fs-card-title { font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.fs-hint { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
+.fs-urlrow { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
+.fs-url { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 12px; height: 36px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-base);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px;
+  color: var(--dsw-alias-label-primary); overflow: hidden; }
+.fs-url span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-qr { display: flex; gap: 16px; align-items: center; margin-top: 14px; padding-top: 14px;
+  border-top: 1px dashed var(--dsw-alias-border-l1); }
+.fs-qr-img { flex: none; border-radius: 8px; background: #ffffff; padding: 6px;
+  border: 1px solid var(--dsw-alias-border-l2); }
+.fs-qr-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.fs-qr-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.fs-qr-url { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+  color: var(--dsw-alias-label-secondary); word-break: break-all; }
+.fs-btn { height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+  border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.fs-btn:hover { border-color: var(--dsw-alias-brand-primary); }
+.fs-btn:disabled { opacity: .55; cursor: default; }
+.fs-btn.primary { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-base); font-weight: 600; }
+.fs-btn.danger { color: var(--dsw-alias-state-error-primary); }
+.fs-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fs-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }
+@media (max-width: 760px) { .fs-root { padding: 18px 16px 48px; } .fs-grid { grid-template-columns: minmax(0,1fr); } }
+.fs-list { display: flex; flex-direction: column; gap: 1px; }
+.fs-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px;
+  font-size: 13px; color: var(--dsw-alias-label-primary); }
+.fs-row:hover { background: var(--dsw-alias-bg-layer-2); }
+.fs-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-row .m { flex: none; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.fs-empty { font-size: 13px; color: var(--dsw-alias-label-secondary); padding: 8px; }
+.fs-msg { font-size: 13px; line-height: 1.55; color: var(--dsw-alias-label-primary); padding: 7px 8px;
+  border-top: 1px solid var(--dsw-alias-border-l1); }
+.fs-msg:first-child { border-top: 0; }
+.fs-msg .t { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-right: 8px;
+  font-variant-numeric: tabular-nums; }
+.fs-msg .b { white-space: pre-wrap; word-break: break-word; }
+.fs-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.fs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2);
+  font-size: 12px; color: var(--dsw-alias-label-secondary); max-width: 100%; }
+.fs-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-chip button { border: 0; background: transparent; color: var(--dsw-alias-label-secondary);
+  cursor: pointer; font-size: 12px; padding: 0 4px; }
+.fs-chip button:hover { color: var(--dsw-alias-state-error-primary); }
+.fs-inputrow { display: flex; gap: 8px; }
+.fs-input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary); }
+.fs-shot { display: block; width: 100%; margin-top: 12px; border-radius: 10px;
+  border: 1px solid var(--dsw-alias-border-l1); }
+.fs-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px;
+  color: var(--dsw-alias-label-secondary); margin-top: 12px; }
+.fs-meta code { font-family: ui-monospace, Consolas, monospace; color: var(--dsw-alias-label-primary); }
+.fs-toast { font-size: 12px; color: var(--dsw-alias-state-success-primary); }
+.fs-toast.err { color: var(--dsw-alias-state-error-primary); }
+.fs-warn { font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
+`;
+
+    function Icon({ size = 20, active = false }) {
+      return h('svg', {
+        viewBox: '0 0 24 24', width: size, height: size, fill: 'none',
+        stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round',
+        'aria-hidden': true, style: { display: 'block', opacity: active ? 1 : 0.78 },
+      },
+      h('rect', { x: 3.2, y: 5.6, width: 11.4, height: 13.6, rx: 2.2 }),
+      h('path', { d: 'M3.2 9.4h11.4' }),
+      h('path', { d: 'M8.9 5.6v3.8' }),
+      h('rect', { x: 13.4, y: 8.2, width: 7.4, height: 11, rx: 2 }),
+      h('path', { d: 'M15.6 16.4h3' }));
+    }
+
+    function fmtSize(bytes) {
+      const b = Number(bytes) || 0;
+      if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+      if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+      if (b >= 1024) return Math.round(b / 1024) + ' KB';
+      return b + ' B';
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return '';
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, '0');
+      return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    // 主题样式：优先用运行时 styles 内置服务，缺失时退回一个 <style> 元素。
+    function insertStyles() {
+      try {
+        if (typeof styles !== 'undefined' && styles && typeof styles.insert === 'function') {
+          const dispose = styles.insert(CSS);
+          return typeof dispose === 'function' ? dispose : () => {};
+        }
+      } catch { /* 退回 DOM 注入 */ }
+      const el = document.createElement('style');
+      el.setAttribute('data-dsh-file-station', '');
+      el.textContent = CSS;
+      document.head.appendChild(el);
+      return () => { try { el.remove(); } catch { /* ignore */ } };
+    }
+
+    class Boundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { err: null };
+      }
+      static getDerivedStateFromError(err) {
+        return { err };
+      }
+      componentDidCatch(err) {
+        try { console.error('[file-station]', err); } catch { /* ignore */ }
+      }
+      render() {
+        if (this.state.err) {
+          return h('div', { className: 'fs-root' }, h('div', { className: 'fs-inner' },
+            h('div', { className: 'fs-card' },
+              h('div', { className: 'fs-empty' },
+                '文件传输台面板出错：' + String((this.state.err && this.state.err.message) || this.state.err)))));
+        }
+        return this.props.children;
+      }
+    }
+
+    function Btn({ children, onClick, primary, danger, disabled, title }) {
+      return h('button', {
+        type: 'button',
+        className: 'fs-btn' + (primary ? ' primary' : '') + (danger ? ' danger' : ''),
+        onClick, disabled, title,
+      }, children);
+    }
+
+    function Panel(props) {
+      const ctx = props && props.ctx;
+      const t = useT(ctx);
+      const [status, setStatus] = useState(null);
+      const [failed, setFailed] = useState(false);
+      const [busy, setBusy] = useState('');
+      const [toast, setToast] = useState(null);
+      const [dirInput, setDirInput] = useState('');
+      const toastTimer = useRef(0);
+
+      const say = useCallback((text, ok = true) => {
+        setToast({ text, ok });
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(null), 3200);
+      }, []);
+
+      const load = useCallback(async () => {
+        try {
+          const res = await fetch('/file-station/api/status', { headers: { Accept: 'application/json' } });
+          const data = await res.json();
+          if (data && data.ok) {
+            setStatus(data);
+            setFailed(false);
+          } else setFailed(true);
+        } catch {
+          setFailed(true);
+        }
+      }, []);
+
+      useEffect(() => {
+        load();
+        const id = setInterval(() => { if (!document.hidden) load(); }, 2000);
+        const onVis = () => { if (!document.hidden) load(); };
+        document.addEventListener('visibilitychange', onVis);
+        return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); clearTimeout(toastTimer.current); };
+      }, [load]);
+
+      const act = useCallback(async (action, extra) => {
+        setBusy(action);
+        try {
+          const res = await fetch('/file-station/api/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ action }, extra || {})),
+          });
+          const data = await res.json();
+          if (data && data.status) setStatus(data.status);
+          if (data && data.ok) {
+            if (action === 'shot') say(t('shotDone'));
+            else if (action === 'reset-token') say(t('resetDone'));
+            else if (action === 'set-share-dirs') say(t('dirsUpdated'));
+            else if (action === 'clear-queue') say(t('cleared'));
+          } else say((data && data.error) || t('netError'), false);
+        } catch {
+          say(t('netError'), false);
+        } finally {
+          setBusy('');
+          load();
+        }
+      }, [load, say, t]);
+
+      const copy = useCallback(async () => {
+        const text = status ? status.lanUrl : '';
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          say(t('copied'));
+        } catch {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch { ok = false; }
+          document.body.removeChild(ta);
+          say(ok ? t('copied') : t('copyFail'), ok);
+        }
+      }, [status, say, t]);
+
+      const addDir = useCallback(() => {
+        const next = dirInput.trim();
+        if (!next) return;
+        const dirs = (status && status.extraDirs ? status.extraDirs : []).concat([next]);
+        setDirInput('');
+        act('set-share-dirs', { dirs });
+      }, [dirInput, status, act]);
+
+      const removeDir = useCallback((dir) => {
+        const dirs = (status && status.extraDirs ? status.extraDirs : []).filter((x) => x !== dir);
+        act('set-share-dirs', { dirs });
+      }, [status, act]);
+
+      if (!status) {
+        return h('div', { className: 'fs-root' }, h('div', { className: 'fs-inner' },
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-empty' }, failed ? t('error') : t('loading')),
+            h('div', { style: { marginTop: 10 } },
+              h(Btn, { onClick: load, disabled: busy === 'reload' }, t('refresh'))))));
+      }
+
+      const running = status.running;
+      const messages = (status.queue || []).slice().reverse();
+      const extras = status.extraDirs || [];
+      const uploads = status.uploads || [];
+      const texts = status.texts || [];
+
+      return h('div', { className: 'fs-root' },
+        h('div', { className: 'fs-inner' },
+
+          // 标题
+          h('div', { className: 'fs-head' },
+            h('div', { className: 'fs-head-icon' }, h(Icon, { size: 34, active: true })),
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', { className: 'fs-title' }, t('title')),
+              h('div', { className: 'fs-sub' }, t('subtitle'))),
+            h('span', { className: 'fs-badge' },
+              h('span', { className: 'fs-dot' + (running ? ' on' : '') }),
+              t(running ? 'running' : 'stopped'),
+              h('span', { style: { opacity: 0.7 } }, '· ' + t('port') + ' ' + status.port))),
+
+          // 访问地址 + 扫码
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-card-head' },
+              h('div', { className: 'fs-card-title' }, t('address')),
+              toast ? h('span', { className: 'fs-toast' + (toast.ok ? '' : ' err') }, toast.text) : null),
+            h('div', { className: 'fs-hint' }, t('addressHint')),
+            status.lanIp ? null : h('div', { className: 'fs-warn', style: { marginTop: 8 } }, t('noLan')),
+            h('div', { className: 'fs-urlrow' },
+              h('div', { className: 'fs-url', title: status.lanUrl }, h('span', null, status.lanUrl)),
+              h(Btn, { primary: true, onClick: copy }, t('copy')),
+              h(Btn, { onClick: () => act('open-local'), disabled: busy === 'open-local' }, t('openLocal'))),
+            status.lanIp
+              ? h('div', { className: 'fs-qr' },
+                  h('img', {
+                    className: 'fs-qr-img',
+                    src: '/file-station/api/qr.svg?v=' + encodeURIComponent(status.token || ''),
+                    alt: t('qrAlt'),
+                    width: 168,
+                    height: 168,
+                  }),
+                  h('div', { className: 'fs-qr-side' },
+                    h('div', { className: 'fs-qr-title' }, '📱 ' + t('qrTitle')),
+                    h('div', { className: 'fs-hint' }, t('qrHint')),
+                    h('div', { className: 'fs-qr-url' }, status.lanUrl)))
+              : null),
+
+          // 快捷操作
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-card-head' },
+              h('div', { className: 'fs-card-title' }, t('title')),
+              h('div', { className: 'fs-actions' },
+                h(Btn, { onClick: () => act('open-share') }, '📂 ' + t('openShare')),
+                h(Btn, { onClick: () => act('open-upload') }, '📥 ' + t('openUpload')),
+                h(Btn, {
+                  primary: true,
+                  onClick: () => act('shot'),
+                  disabled: busy === 'shot',
+                }, busy === 'shot' ? t('shotBusy') : '📷 ' + t('shot')),
+                h(Btn, { danger: true, onClick: () => act('reset-token'), disabled: busy === 'reset-token' }, t('resetToken')))),
+            h('div', { className: 'fs-hint' }, t('freeHint')),
+            status.shotAt ? h('img', {
+              className: 'fs-shot',
+              src: '/file-station/api/shot.png?t=' + status.shotAt,
+              alt: t('latestShot'),
+            }) : null),
+
+          // 最近文件
+          h('div', { className: 'fs-grid' },
+            h('div', { className: 'fs-card' },
+              h('div', { className: 'fs-card-head' },
+                h('div', { className: 'fs-card-title' }, t('recentUploads')),
+                h(Btn, { onClick: () => act('open-upload') }, t('openUpload'))),
+              uploads.length
+                ? h('div', { className: 'fs-list' }, uploads.map((it) => h('div', { className: 'fs-row', key: it.n, title: it.f },
+                  h('span', { className: 'n' }, '📄 ' + it.n),
+                  h('span', { className: 'm' }, fmtSize(it.sz) + ' · ' + fmtTime(it.mtime)))))
+                : h('div', { className: 'fs-empty' }, t('empty'))),
+            h('div', { className: 'fs-card' },
+              h('div', { className: 'fs-card-head' },
+                h('div', { className: 'fs-card-title' }, t('recentTexts')),
+                h(Btn, { onClick: () => act('open-share') }, t('openShare'))),
+              texts.length
+                ? h('div', { className: 'fs-list' }, texts.map((it) => h('div', { className: 'fs-row', key: it.n, title: it.f },
+                  h('span', { className: 'n' }, '📝 ' + it.n),
+                  h('span', { className: 'm' }, fmtSize(it.sz) + ' · ' + fmtTime(it.mtime)))))
+                : h('div', { className: 'fs-empty' }, t('empty')))),
+
+          // 手机留言
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-card-head' },
+              h('div', { className: 'fs-card-title' }, t('messages') + (status.messages ? ' (' + status.messages + ')' : '')),
+              messages.length
+                ? h(Btn, { onClick: () => act('clear-queue'), danger: true, disabled: busy === 'clear-queue' }, t('clearQueue'))
+                : null),
+            messages.length
+              ? h('div', null, messages.map((m, i) => h('div', { className: 'fs-msg', key: i },
+                h('span', { className: 't' }, m.t),
+                h('span', { className: 'b' }, m.text))))
+              : h('div', { className: 'fs-empty' }, t('empty'))),
+
+          // 额外共享目录
+          h('div', { className: 'fs-card' },
+            h('div', { className: 'fs-card-head' },
+              h('div', { className: 'fs-card-title' }, t('settings'))),
+            h('div', { className: 'fs-hint' }, t('settingsHint')),
+            extras.length
+              ? h('div', { className: 'fs-chips', style: { marginTop: 10 } }, extras.map((dir) => h('span', { className: 'fs-chip', key: dir },
+                h('span', { title: dir }, dir),
+                h('button', { type: 'button', title: t('remove'), onClick: () => removeDir(dir) }, '✕'))))
+              : null,
+            h('div', { className: 'fs-inputrow', style: { marginTop: 10 } },
+              h('input', {
+                className: 'fs-input',
+                value: dirInput,
+                placeholder: t('addPlaceholder'),
+                onChange: (e) => setDirInput(e.target.value),
+                onKeyDown: (e) => { if (e.key === 'Enter') addDir(); },
+              }),
+              h(Btn, { onClick: addDir, disabled: !dirInput.trim() || busy === 'set-share-dirs' }, t('add')))),
+
+          // 底部信息
+          h('div', { className: 'fs-meta' },
+            h('span', null, t('port') + ' ', h('code', null, String(status.port))),
+            h('span', null, t('dataDir') + ' ', h('code', null, status.dataDir)),
+            h('span', null, h('button', {
+              type: 'button',
+              className: 'fs-btn',
+              style: { height: 26, fontSize: 12 },
+              onClick: () => act('open-data'),
+            }, t('openData')))),
+        ));
+    }
+
+    function SidebarButton(ctx) {
+      return function SidebarEntry(props) {
+        const size = props && props.size ? props.size : 20;
+        const active = Boolean(props && props.active);
+        return h(Icon, { size, active });
+      };
+    }
+
+    return {
+      inject: ['slots'],
+      apply(ctx) {
+        const disposeStyle = insertStyles();
+
+        const label = () => {
+          try {
+            const locale = ctx.get('locale');
+            const lang = locale ? locale.getSnapshot().active : 'zh';
+            const pack = DICT[String(lang || 'zh').split('-')[0]] || DICT.zh;
+            return pack.title;
+          } catch {
+            return DICT.zh.title;
+          }
+        };
+
+        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+          name: 'sidebar.panellist',
+          id: NS,
+          order: 30,
+          label,
+        }, SidebarButton(ctx)));
+
+        ctx.slots.inject('main', () => ctx.slots.register({
+          name: 'main',
+          key: NS,
+        }, () => h(Boundary, null, h(Panel, { ctx }))));
+
+        return () => {
+          if (typeof disposeStyle === 'function') disposeStyle();
+        };
+      },
+    };
+  },
+});
