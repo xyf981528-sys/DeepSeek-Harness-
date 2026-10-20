@@ -124,6 +124,12 @@ window.__ModuleLoader__.load({
       .mm-field-label { font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
       .mm-form-actions { display: flex; gap: 8px; margin-top: 14px; }
       .mm-list { margin-top: 14px; display: flex; flex-direction: column; }
+      .mm-list.mm-scroll { max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
+      .mm-list.mm-scroll::-webkit-scrollbar { width: 8px; }
+      .mm-list.mm-scroll::-webkit-scrollbar-track { background: transparent; }
+      .mm-list.mm-scroll::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-primary); border-radius: 8px; }
+      .mm-list.mm-scroll::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-label-tertiary); }
+      .mm-list.mm-scroll { scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-primary) transparent; }
       .mm-item { display: flex; align-items: center; gap: 12px; padding: 10px 4px;
         border-bottom: 1px solid var(--dsw-alias-border-secondary); }
       .mm-item:last-child { border-bottom: 0; }
@@ -382,7 +388,7 @@ window.__ModuleLoader__.load({
           ),
           scan.error ? h('div', { className: 'mm-err' }, scan.error + ' · ' + t.scanHint) : null,
           scan.games && scan.games.length
-            ? h('div', { className: 'mm-list' },
+            ? h('div', { className: 'mm-list mm-scroll' },
               scan.games.map((g) => h('div', { className: 'mm-item', key: g.appid },
                 h('span', { className: 'mm-item-name', title: g.gameDir }, g.name),
                 h('span', { className: 'mm-badge' }, g.sizeGB + ' GB'),
@@ -475,7 +481,7 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'mm-empty' }, t.loading)
             : filtered.length === 0
               ? h('div', { className: 'mm-empty' }, mods.length === 0 ? t.emptyMods : '—')
-              : h('div', { className: 'mm-list' },
+              : h('div', { className: 'mm-list mm-scroll' },
                 filtered.map((m) => h('div', { className: 'mm-item', key: m.name },
                   h('span', { className: 'mm-item-name' + (m.enabled ? '' : ' off'), title: m.display }, m.display),
                   h('span', { className: 'mm-badge' }, m.kind === 'dir' ? 'DIR' : (fmtSize(m.size) || 'FILE')),
