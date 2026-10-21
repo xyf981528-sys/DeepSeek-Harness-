@@ -94,7 +94,11 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-      .mm-page { padding: 24px 28px 40px; max-width: 980px; }
+      .mm-page { padding: 24px 28px 40px; max-width: 980px; height: 100%; overflow-y: auto; box-sizing: border-box; }
+      .mm-page::-webkit-scrollbar { width: 8px; }
+      .mm-page::-webkit-scrollbar-track { background: transparent; }
+      .mm-page::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-primary); border-radius: 8px; }
+      .mm-page::-webkit-scrollbar-thumb:hover { background: var(--dsw-alias-label-tertiary); }
       .mm-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
       .mm-head-icon { width: 34px; height: 34px; color: var(--dsw-alias-brand-primary); }
       .mm-title { font-size: 20px; font-weight: 600; color: var(--dsw-alias-label-primary); line-height: 1.2; }
