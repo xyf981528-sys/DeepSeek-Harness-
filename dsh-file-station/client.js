@@ -853,17 +853,7 @@ window.__ModuleLoader__.load({
           }
         };
 
-        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-          name: 'sidebar.panellist',
-          id: NS,
-          order: 30,
-          label,
-        }, SidebarButton(ctx)));
-
-        ctx.slots.inject('main', () => ctx.slots.register({
-          name: 'main',
-          key: NS,
-        }, () => h(Boundary, null, h(Panel, { ctx }))));
+        // 侧边栏入口已收进 dsh-toolbox（工具箱）；这里只保留 Host 能力，不再注册面板。
 
         return () => {
           if (typeof disposeStyle === 'function') disposeStyle();

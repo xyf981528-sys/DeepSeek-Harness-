@@ -207,17 +207,7 @@ window.__ModuleLoader__.load({
           } catch { return DICT.zh.title }
         }
 
-        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-          name: 'sidebar.panellist',
-          id: NS,
-          order: 41,
-          label: t,
-        }, (props) => h(Icon, { size: props && props.size ? props.size : 20, active: Boolean(props && props.active) })))
-
-        ctx.slots.inject('main', () => ctx.slots.register({
-          name: 'main',
-          key: NS,
-        }, () => h(Panel, { ctx })))
+        // 侧边栏入口已收进 dsh-toolbox（工具箱）；这里只保留 Host 能力，不再注册面板。
 
         return () => {
           if (typeof dispose === 'function') dispose()
