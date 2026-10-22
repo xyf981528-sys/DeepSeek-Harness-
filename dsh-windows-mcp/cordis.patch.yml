@@ -1,0 +1,23 @@
+- insert:
+    - id: windows-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: windows
+        transport: stdio
+        command: 'D:\DeepSeek Y\应用\Windows-MCP\.venv\Scripts\windows-mcp.exe'
+        args:
+          - serve
+          - '--transport'
+          - stdio
+          - '--config'
+          - 'D:\DeepSeek Y\应用\Windows-MCP\config.toml'
+          - '--exclude-tools'
+          - 'PowerShell,Registry,FileSystem,Process'
+          - '--no-control'
+        env:
+          ANONYMIZED_TELEMETRY: 'false'
+          PYTHONUTF8: '1'
+          WINDOWS_MCP_DISABLE_FLASH: '1'
+        cwd: 'D:\DeepSeek Y\应用\Windows-MCP'
+        failOnStartupError: false
+        toolCallTimeoutMs: 120000

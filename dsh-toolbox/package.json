@@ -1,0 +1,21 @@
+{
+  "name": "dsh-toolbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH 工具箱：重启、文件传输、Windows-MCP 状态整合面板",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": ["lib/index.js", "client.js", "cordis.patch.yml", "icon.svg", "README.md"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

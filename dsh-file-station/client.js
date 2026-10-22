@@ -80,7 +80,13 @@ window.__ModuleLoader__.load({
         loading: '加载中…',
         error: '读取状态失败，插件可能未启动',
         latestShot: '最近一次截图',
-        freeHint: '手机上传的文件会进「上传」目录；手机发来的文字和下载的文件在「共享」目录。',
+        freeHint: '手机上传的文件会进「上传」目录；手机发来的文字和下载的文件在「共享」目录。电脑上把文件拖进本面板，会直接存到「共享」目录。',
+        dropActive: '松开鼠标，传到共享文件夹',
+        dropSub: '手机打开文件传输台即可看到并下载',
+        uploading: '正在上传 {i}/{n}：{name}',
+        uploadedToShare: '已传到共享文件夹：{n} 个文件',
+        uploadFailed: '有 {n} 个文件上传失败',
+        uploadFailedDetail: '上传失败：{n} 个文件 — {err}',
         netError: '网络错误，请稍后重试',
         dirsUpdated: '共享目录已更新',
         cleared: '留言已清空',
@@ -151,7 +157,13 @@ window.__ModuleLoader__.load({
         loading: 'Loading…',
         error: 'Could not read status — is the plugin running?',
         latestShot: 'Latest screenshot',
-        freeHint: 'Phone uploads land in "uploads"; texts and shared files live in "shared".',
+        freeHint: 'Phone uploads land in "uploads"; texts and shared files live in "shared". Drag files onto this panel to put them straight into "shared".',
+        dropActive: 'Drop to send to the shared folder',
+        dropSub: 'The phone can see and download it right away',
+        uploading: 'Uploading {i}/{n}: {name}',
+        uploadedToShare: 'Saved to shared folder: {n} file(s)',
+        uploadFailed: '{n} file(s) failed to upload',
+        uploadFailedDetail: 'Upload failed: {n} file(s) — {err}',
         netError: 'Network error, try again',
         dirsUpdated: 'Shared folders updated',
         cleared: 'Messages cleared',
@@ -170,7 +182,16 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-.fs-root { height: 100%; overflow: auto; box-sizing: border-box; padding: 28px 32px 64px; }
+.fs-root { height: 100%; overflow: auto; box-sizing: border-box; padding: 28px 32px 64px; position: relative; }
+.fs-drop { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--dsw-alias-bg-base) 72%, transparent);
+  border: 2px dashed var(--dsw-alias-brand-primary); border-radius: 12px; pointer-events: none; }
+.fs-drop-box { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 28px;
+  border-radius: 14px; background: var(--dsw-alias-bg-overlay); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.fs-drop-ico { font-size: 30px; line-height: 1; }
+.fs-drop-title { font-size: 15px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.fs-drop-sub { font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
+.fs-drop-upload .fs-drop-title { font-size: 13.5px; }
 .fs-inner { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
 .fs-head { display: flex; align-items: center; gap: 12px; }
 .fs-head-icon { width: 34px; height: 34px; flex: none; color: var(--dsw-alias-brand-primary); }
@@ -211,8 +232,8 @@ window.__ModuleLoader__.load({
 .fs-btn:hover { border-color: var(--dsw-alias-brand-primary); }
 .fs-btn:disabled { opacity: .55; cursor: default; }
 .fs-btn.primary { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary);
-  color: var(--dsw-alias-bg-base); font-weight: 600; }
-.fs-btn.danger { color: var(--dsw-alias-state-error-primary); }
+  color: #fff; font-weight: 600; }
+.fs-btn.danger { color: #fff; background: #b23b3b; border-color: #b23b3b; }
 .fs-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .fs-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }
 @media (max-width: 760px) { .fs-root { padding: 18px 16px 48px; } .fs-grid { grid-template-columns: minmax(0,1fr); } }
@@ -354,6 +375,9 @@ window.__ModuleLoader__.load({
       const [dirInput, setDirInput] = useState('');
       const [draft, setDraft] = useState('');
       const [reveal, setReveal] = useState(null);
+      const [dragOver, setDragOver] = useState(false);
+      const [uploading, setUploading] = useState(null);
+      const dragDepth = useRef(0);
       const toastTimer = useRef(0);
       const seenUpload = useRef(0);
       const sayRef = useRef(null);
@@ -381,8 +405,11 @@ window.__ModuleLoader__.load({
             const up = data.lastUpload;
             if (up && up.at && up.at !== seenUpload.current) {
               seenUpload.current = up.at;
-              const tt = tRef.current || ((k) => k);
-              sayRef.current(tt('uploadDone').replace('{n}', up.name).replace('{s}', fmtSize(up.size)), true);
+              // 电脑拖进共享目录的上传由 uploadFiles 自己提示，这里只报手机传来的
+              if (up.to !== 'share') {
+                const tt = tRef.current || ((k) => k);
+                sayRef.current(tt('uploadDone').replace('{n}', up.name).replace('{s}', fmtSize(up.size)), true);
+              }
             }
             setFailed(false);
           } else setFailed(true);
@@ -391,6 +418,83 @@ window.__ModuleLoader__.load({
           setFailed(true);
         }
       }, []);
+
+      // 桌面拖拽：直接把文件传到「共享」目录（手机可立即下载），不走「上传」目录。
+      const uploadFiles = useCallback(async (files) => {
+        if (!files || !files.length) return;
+        let ok = 0;
+        let fail = 0;
+        let lastErr = '';
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          setUploading({ i: i + 1, n: files.length, name: f.name });
+          try {
+            const res = await fetch('/file-station/api/drop', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/octet-stream',
+                'X-Filename': encodeURIComponent(f.name),
+              },
+              body: f,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || !data.ok) {
+              throw new Error((data && data.error) || ('HTTP ' + res.status));
+            }
+            ok++;
+          } catch (e) {
+            fail++;
+            lastErr = (e && e.message) ? String(e.message) : String(e);
+            try { console.error('[file-station] upload failed', e); } catch { /* ignore */ }
+          }
+        }
+        setUploading(null);
+        load();
+        const tt = tRef.current || ((k) => k);
+        if (fail === 0) say(tt('uploadedToShare').replace('{n}', String(ok)));
+        else say(tt('uploadFailedDetail').replace('{n}', String(fail)).replace('{err}', lastErr.slice(0, 120)), false);
+      }, [load, say]);
+
+      const hasFiles = (e) => {
+        const dt = e && e.dataTransfer;
+        if (!dt) return false;
+        if (dt.types) {
+          for (let i = 0; i < dt.types.length; i++) {
+            if (dt.types[i] === 'Files') return true;
+          }
+        }
+        return false;
+      };
+      const onDragEnter = (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth.current++;
+        setDragOver(true);
+      };
+      const onDragOver = (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try { e.dataTransfer.dropEffect = 'copy'; } catch { /* ignore */ }
+      };
+      const onDragLeave = (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (!dragDepth.current) setDragOver(false);
+      };
+      const onDrop = (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth.current = 0;
+        setDragOver(false);
+        const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+        uploadFiles(files);
+      };
 
       useEffect(() => {
         load();
@@ -544,7 +648,29 @@ window.__ModuleLoader__.load({
       const uploads = status.uploads || [];
       const texts = status.texts || [];
 
-      return h('div', { className: 'fs-root' },
+      return h('div', {
+        className: 'fs-root',
+        onDragEnter,
+        onDragOver,
+        onDragLeave,
+        onDrop,
+      },
+        dragOver
+          ? h('div', { className: 'fs-drop' },
+              h('div', { className: 'fs-drop-box' },
+                h('div', { className: 'fs-drop-ico' }, '📥'),
+                h('div', { className: 'fs-drop-title' }, t('dropActive')),
+                h('div', { className: 'fs-drop-sub' }, t('dropSub'))))
+          : null,
+        uploading
+          ? h('div', { className: 'fs-drop fs-drop-upload' },
+              h('div', { className: 'fs-drop-box' },
+                h('div', { className: 'fs-drop-title' },
+                  t('uploading')
+                    .replace('{i}', String(uploading.i))
+                    .replace('{n}', String(uploading.n))
+                    .replace('{name}', uploading.name))))
+          : null,
         h('div', { className: 'fs-inner' },
 
           // 标题

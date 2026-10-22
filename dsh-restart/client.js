@@ -129,7 +129,10 @@ window.__ModuleLoader__.load({
         setError('')
         try {
           const r = await fetch('/dsh-restart/api/restart', { method: 'POST' })
-          if (!r.ok) throw new Error('HTTP ' + r.status)
+          if (!r.ok) {
+            const data = await r.json().catch(() => null)
+            throw new Error((data && data.error) || ('HTTP ' + r.status))
+          }
         } catch (e) {
           setPhase('idle')
           setError(t.failed + (e && e.message ? e.message : String(e)))

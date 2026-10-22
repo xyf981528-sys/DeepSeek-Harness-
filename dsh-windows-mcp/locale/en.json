@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Windows-MCP Desktop Control",
+    "description": "Connect Windows-MCP so the agent can screenshot, click and type on this desktop (Shell/File/Registry/Process tools excluded by default)."
+  }
+}

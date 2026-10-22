@@ -147,17 +147,34 @@ export const name = 'dsh-file-station';
 export const inject = ['webServer'];
 
 export function apply(ctx, config = {}) {
-  const station = new FileStation({
-    dataDir: typeof config.dataDir === 'string' && config.dataDir.trim()
-      ? path.resolve(config.dataDir.trim())
-      : DEFAULT_DATA_DIR,
-    port: Number(config.port) > 0 ? Number(config.port) : PORT_PREF,
-    logger: (line) => ctx.logger ? ctx.logger.info(line) : undefined,
-  });
+  const bootLog = 'D:\\DeepSeek Y\\系统优化\\file-station-boot.log';
+  const boot = (msg) => {
+    try { fs.appendFileSync(bootLog, new Date().toISOString() + ' ' + msg + '\r\n'); } catch { /* ignore */ }
+  };
+  boot('apply start');
+
+  let station;
+  try {
+    station = new FileStation({
+      dataDir: typeof config.dataDir === 'string' && config.dataDir.trim()
+        ? path.resolve(config.dataDir.trim())
+        : DEFAULT_DATA_DIR,
+      port: Number(config.port) > 0 ? Number(config.port) : PORT_PREF,
+      logger: (line) => ctx.logger ? ctx.logger.info(line) : undefined,
+    });
+  } catch (err) {
+    boot('constructor failed: ' + String(err && err.stack || err));
+    throw err;
+  }
 
   ctx.effect(() => {
     const disposers = [];
-    station.start();
+    try {
+      station.start();
+      boot('start ok (port=' + (station.port || '?') + ')');
+    } catch (err) {
+      boot('start failed: ' + String(err && err.stack || err));
+    }
     disposers.push(() => station.stop());
     disposers.push(ctx.webServer.register({
       kind: 'exact',
@@ -183,6 +200,11 @@ export function apply(ctx, config = {}) {
       kind: 'exact',
       path: '/file-station/api/inbox',
       handler: (req, res) => station.handleGui(req, res, 'inbox'),
+    }));
+    disposers.push(ctx.webServer.register({
+      kind: 'exact',
+      path: '/file-station/api/drop',
+      handler: (req, res) => station.handleGui(req, res, 'drop'),
     }));
     return () => {
       for (const dispose of disposers.reverse()) {
@@ -1091,47 +1113,79 @@ class FileStation {
     return Buffer.concat(chunks);
   }
 
-  async handleUpload(req, res) {
+  async handleUpload(req, res, forceShare = false) {
     let rawName = req.headers['x-filename'];
     if (rawName === undefined) return this.safeJson(res, 400, { ok: false, error: '缺少文件名' });
     try { rawName = decodeURIComponent(String(rawName)); } catch { /* 保留原样 */ }
     const name = this.safeName(rawName);
-    const total = Number(req.headers['content-length'] || 0);
-    if (!total || total < 0) return this.safeJson(res, 411, { ok: false, error: '缺少文件长度（Content-Length）' });
+    // 目标目录：默认「上传」（手机传电脑），?to=share 时改为「共享」（电脑拖进来，手机可下载）
+    let toShare = !!forceShare;
+    if (!toShare) {
+      try {
+        const u = new URL(String(req.url || ''), 'http://localhost');
+        toShare = u.searchParams.get('to') === 'share';
+      } catch { /* 保持默认 */ }
+    }
+    const destDir = toShare ? this.shareDir : this.uploadDir;
+    // Content-Length 可能不存在：浏览器 fetch(File) 常以 chunked 发送。
+    // 有就先用它做上限/空间检查，没有就在流式写入时计数并卡 8 GB 上限。
+    const declared = Number(req.headers['content-length'] || 0);
+    const total = Number.isFinite(declared) && declared > 0 ? declared : 0;
     if (total > MAX_UPLOAD) return this.safeJson(res, 413, { ok: false, error: '单个文件超过 8 GB 上限' });
     let free = 0;
-    try { free = fs.statfsSync(this.uploadDir).bavail * fs.statfsSync(this.uploadDir).bsize; } catch { free = 0; }
-    if (free && total + FREE_MARGIN > free) {
+    try { free = fs.statfsSync(destDir).bavail * fs.statfsSync(destDir).bsize; } catch { free = 0; }
+    if (free && total && total + FREE_MARGIN > free) {
       return this.safeJson(res, 507, { ok: false, error: '电脑磁盘空间不足' });
     }
-    const temp = path.join(this.uploadDir, '.' + crypto.randomBytes(4).toString('hex') + '.part');
+    const temp = path.join(destDir, '.' + crypto.randomBytes(4).toString('hex') + '.part');
     let got = 0;
+    let tooLarge = false;
     try {
       const out = fs.createWriteStream(temp);
       await new Promise((resolve, reject) => {
-        req.on('data', (chunk) => { got += chunk.length; });
-        req.on('error', reject);
-        out.on('error', reject);
-        out.on('finish', resolve);
+        let settled = false;
+        const fail = (err) => { if (!settled) { settled = true; reject(err); } };
+        req.on('data', (chunk) => {
+          got += chunk.length;
+          if (got > MAX_UPLOAD && !tooLarge) {
+            tooLarge = true;
+            try { req.destroy(); } catch { /* ignore */ }
+            try { out.destroy(); } catch { /* ignore */ }
+            fail(new Error('too large'));
+          }
+        });
+        req.on('error', fail);
+        out.on('error', fail);
+        out.on('finish', () => { if (!settled) { settled = true; resolve(); } });
         req.pipe(out);
       });
     } catch (err) {
       try { fs.unlinkSync(temp); } catch { /* ignore */ }
+      if (tooLarge) return this.safeJson(res, 413, { ok: false, error: '单个文件超过 8 GB 上限' });
       return this.safeJson(res, 400, { ok: false, error: String(err && err.message || err) });
     }
-    if (got !== total) {
+    if (tooLarge) {
+      try { fs.unlinkSync(temp); } catch { /* ignore */ }
+      return this.safeJson(res, 413, { ok: false, error: '单个文件超过 8 GB 上限' });
+    }
+    if (total && got !== total) {
       try { fs.unlinkSync(temp); } catch { /* ignore */ }
       return this.safeJson(res, 400, { ok: false, error: '上传中断，已丢弃不完整文件' });
     }
-    const finalPath = this.uniquePath(path.join(this.uploadDir, name));
+    if (!got) {
+      try { fs.unlinkSync(temp); } catch { /* ignore */ }
+      return this.safeJson(res, 400, { ok: false, error: '空文件或不是文件（文件夹不能直接拖入）' });
+    }
+    const size = got;
+    const finalPath = this.uniquePath(path.join(destDir, name));
     try { fs.renameSync(temp, finalPath); } catch (err) {
       try { fs.unlinkSync(temp); } catch { /* ignore */ }
       return this.safeJson(res, 500, { ok: false, error: '保存失败：' + String(err && err.message || err) });
     }
-    this.log('上传 ' + path.basename(finalPath) + ' (' + total + ' B)');
-    // 面板靠轮询 status 知道"手机传完了"，所以把最近一次上传记在状态里
-    this.lastUpload = { name: path.basename(finalPath), size: total, t: this.stamp(), at: Date.now() };
-    return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size: total });
+    this.log((toShare ? '共享 ' : '上传 ') + path.basename(finalPath) + ' (' + size + ' B)');
+    // 面板靠轮询 status 知道"传完了"，所以把最近一次上传记在状态里
+    this.lastUpload = { name: path.basename(finalPath), size, t: this.stamp(), at: Date.now(), to: toShare ? 'share' : 'upload' };
+    return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size });
   }
 
   async handleTextPost(req, res) {
@@ -1315,6 +1369,10 @@ class FileStation {
     if (kind === 'inbox') {
       if (req.method !== 'GET') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
       return this.safeJson(res, 200, { ok: true, items: this.inboxList(50), count: this.inboxCount() });
+    }
+    if (kind === 'drop') {
+      if (req.method !== 'POST') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
+      return this.handleUpload(req, res, true);
     }
     return this.readBody(req, 256 * 1024)
       .then((body) => {

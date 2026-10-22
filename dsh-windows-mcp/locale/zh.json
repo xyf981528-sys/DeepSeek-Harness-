@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Windows-MCP 桌面控制",
+    "description": "通过 Windows-MCP 让 Agent 截图、点击、输入并操作本机桌面（默认排除 Shell/文件/注册表/进程工具）。"
+  }
+}

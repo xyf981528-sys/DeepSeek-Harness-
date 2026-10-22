@@ -1,5 +1,5 @@
+﻿node_modules/
 data/
-node_modules/
+_backup/
+*.bak-*
 *.log
-_token.txt
-shot.png
