@@ -82,6 +82,34 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 
 桌面 Chrome 用 `http://127.0.0.1:19790` 验证过：manifest 200、SW `activated`、`beforeinstallprompt` 会触发。
 
+## 手机 HTTPS（v0.1.3）
+
+PWA 要真正装到手机，必须走 https。插件现在会在 HTTP 端口之后自动再开一个 HTTPS 监听（19790 → 19791，被占用则顺延），前提是 `certs/` 里有证书。
+
+### 生成证书（电脑上，一次）
+
+```powershell
+python scripts/make-cert.py
+```
+
+- 首次生成 CA（`certs/ca.crt.pem`），之后复用；换 IP 只重签服务器证书，手机不用重装 CA。
+- 服务器证书自动包含本机局域网 IP、127.0.0.1、localhost 和主机名。
+- `certs/` 已加入 `.gitignore`，私钥不会进仓库。
+
+### 手机安装 CA（一次）
+
+1. 手机浏览器打开 `http://<电脑IP>:19790/pwa/ca.crt` 下载（走 HTTP，不会先弹证书警告）。
+2. Android：设置 → 安全 → 加密与凭据 → 安装证书 → **CA 证书** → 选刚下载的 `.crt`。
+   （不同品牌路径略有差异，常见在「安全 → 更多安全设置 → 加密与凭据」。）
+3. 装好后用 `https://<电脑IP>:19791/?k=访问码` 打开；面板上显示的地址和二维码会自动变成 https。
+4. Edge/Chrome 菜单 → 安装应用；这次可以真正安装成独立窗口。
+
+### 注意
+
+- HTTPS 端口 = HTTP 端口 + 1；被占用会顺延，以 `remote.log` 里的 `=== HTTPS === port=` 或面板地址为准。
+- 电脑 IP 变了：重跑 `python scripts/make-cert.py`，重启 DSH；手机上的 CA 不用重装。
+- 自签 CA 只装在你自己的手机上，不要装到不信任的机器。
+
 ## 数据位置
 
 默认是**插件目录下的 `data`**，即 `D:\DeepSeek Y\dsh-file-station\data`（跟随插件所在盘，不再写 C 盘）。

@@ -1,5 +1,6 @@
-﻿node_modules/
+node_modules/
 data/
 _backup/
+certs/
 *.bak-*
 *.log

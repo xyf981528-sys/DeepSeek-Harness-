@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import https from 'node:https';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -46,6 +47,8 @@ const PLUGIN_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_DATA_DIR = path.join(PLUGIN_ROOT, 'data');
 /** PWA 静态资源目录（manifest / service worker / 图标）。 */
 const PWA_DIR = path.join(PLUGIN_ROOT, 'pwa');
+/** 本地 HTTPS 证书目录（scripts/make-cert.py 生成，私钥不进 git）。 */
+const CERT_DIR = path.join(PLUGIN_ROOT, 'certs');
 /** 允许未鉴权读取的 PWA 资源：路径 → [文件名, Content-Type]。里面不含访问码等秘密。 */
 const PWA_ROUTES = new Map([
   ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json; charset=utf-8']],
@@ -287,6 +290,8 @@ class FileStation {
     this.globalFails = [];
     this.startedAt = 0;
     this.server = null;
+    this.httpsServer = null;
+    this.httpsPort = 0;
     this.port = 0;
     this.shotInfo = '';
     this.agentNotifier = null;
@@ -334,6 +339,7 @@ class FileStation {
         this.lastUpload = null;
         this.reveal = null;
         this.log('=== 启动 === port=' + port + ' lan=' + this.lanUrl());
+        setImmediate(() => this.startHttps());
       };
       const onError = (err) => {
         server.removeListener('error', onError);
@@ -351,12 +357,67 @@ class FileStation {
     attempt();
   }
 
+  /**
+   * 在 HTTP 端口之后的第一个空闲端口上再起一个 HTTPS 监听。
+   * 证书由 scripts/make-cert.py 生成；没有证书就只跑 HTTP，行为与旧版一致。
+   * 手机把自签 CA 装进系统后，就能把这个地址当安全上下文，PWA 才可安装。
+   */
+  startHttps() {
+    if (this.httpsServer) return;
+    let key;
+    let cert;
+    try {
+      key = fs.readFileSync(path.join(CERT_DIR, 'server.key.pem'));
+      cert = fs.readFileSync(path.join(CERT_DIR, 'server.crt.pem'));
+    } catch {
+      this.log('HTTPS: 未找到 certs/server.key.pem / server.crt.pem，跳过');
+      return;
+    }
+    const server = https.createServer({ key, cert }, (req, res) => {
+      Promise.resolve(this.handlePhone(req, res)).catch((err) => {
+        this.safeJson(res, 500, { ok: false, error: String(err && err.message || err) });
+      });
+    });
+    server.headersTimeout = 30000;
+    server.requestTimeout = 30 * 60 * 1000;
+    server.keepAliveTimeout = 5000;
+    server.maxConnections = 64;
+
+    const base = this.port || this.portPref;
+    let port = base + 1;
+    const attempt = () => {
+      const onListening = () => {
+        server.removeListener('listening', onListening);
+        server.removeListener('error', onError);
+        this.httpsServer = server;
+        this.httpsPort = port;
+        this.log('=== HTTPS === port=' + port + ' url=' + this.lanUrl());
+      };
+      const onError = (err) => {
+        server.removeListener('error', onError);
+        server.removeListener('listening', onListening);
+        if (err && err.code === 'EADDRINUSE' && port - base < 40) {
+          port += 1;
+          setImmediate(attempt);
+          return;
+        }
+        this.log('HTTPS-ERR: ' + String(err && err.message || err));
+      };
+      server.once('error', onError);
+      server.listen(port, '0.0.0.0', onListening);
+    };
+    attempt();
+  }
+
   stop() {
-    const server = this.server;
+    for (const srv of [this.httpsServer, this.server]) {
+      if (!srv) continue;
+      try { srv.close(); } catch { /* ignore */ }
+      try { srv.closeAllConnections && srv.closeAllConnections(); } catch { /* ignore */ }
+    }
+    this.httpsServer = null;
+    this.httpsPort = 0;
     this.server = null;
-    if (!server) return;
-    try { server.close(); } catch { /* ignore */ }
-    try { server.closeAllConnections && server.closeAllConnections(); } catch { /* ignore */ }
   }
 
   get running() {
@@ -365,7 +426,10 @@ class FileStation {
 
   lanUrl() {
     const ip = this.lanIp();
-    return 'http://' + (ip || '127.0.0.1') + ':' + (this.port || this.portPref) + '/?k=' + this.token;
+    const httpsOn = Boolean(this.httpsPort);
+    const scheme = httpsOn ? 'https' : 'http';
+    const port = httpsOn ? this.httpsPort : (this.port || this.portPref);
+    return scheme + '://' + (ip || '127.0.0.1') + ':' + port + '/?k=' + this.token;
   }
 
   /** 遮住访问码的展示版地址，面板默认只显示这个。 */
@@ -395,7 +459,10 @@ class FileStation {
   }
 
   localUrl() {
-    return 'http://127.0.0.1:' + (this.port || this.portPref) + '/?k=' + this.token;
+    const httpsOn = Boolean(this.httpsPort);
+    const scheme = httpsOn ? 'https' : 'http';
+    const port = httpsOn ? this.httpsPort : (this.port || this.portPref);
+    return scheme + '://127.0.0.1:' + port + '/?k=' + this.token;
   }
 
   /** 把手机访问地址画成二维码（SVG，矢量，无外部依赖）。 */
@@ -883,9 +950,9 @@ class FileStation {
   }
 
   /** 通过 ?k= 进来时写 HttpOnly Cookie：之后浏览器自动携带，页面 JS 读不到令牌。 */
-  setAuthCookie(res) {
+  setAuthCookie(res, secure) {
     try {
-      res.setHeader('Set-Cookie', 'k=' + this.token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30 * 24 * 3600));
+      res.setHeader('Set-Cookie', 'k=' + this.token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30 * 24 * 3600) + (secure ? '; Secure' : ''));
     } catch { /* ignore */ }
   }
 
@@ -914,13 +981,17 @@ class FileStation {
     if ((req.method === 'GET' || req.method === 'HEAD') && PWA_ROUTES.has(route)) {
       return this.servePwa(req, res, route, req.method === 'HEAD');
     }
+    // CA 证书：手机要先装它才信任 HTTPS；通过 HTTP 端口下载，避免先遇到证书警告。
+    if ((req.method === 'GET' || req.method === 'HEAD') && route === '/pwa/ca.crt') {
+      return this.serveCa(res, req.method === 'HEAD');
+    }
     if (!this.auth(req, url)) {
       const wait = this.retryAfter(req);
       if (wait > 0) res.setHeader('Retry-After', String(wait));
       return this.safeJson(res, 401, { ok: false, error: 'unauthorized' });
     }
     if (queryToken) {
-      this.setAuthCookie(res);
+      this.setAuthCookie(res, Boolean(req.socket && req.socket.encrypted));
       // 打开页面时把地址栏里的令牌换成 Cookie，再 302 掉，历史记录里不留令牌
       if (req.method === 'GET' && (route === '/' || route === '/index.html')) {
         res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
@@ -1570,6 +1641,22 @@ class FileStation {
 
   openFolder(dir) {
     execFile('explorer.exe', [dir], { windowsHide: false }, () => { /* explorer 退出码不可靠，忽略 */ });
+  }
+
+  /** 提供 CA 证书供手机安装（公开文件，不涉及私钥）。 */
+  serveCa(res, headOnly) {
+    let body;
+    try { body = fs.readFileSync(path.join(CERT_DIR, 'ca.crt.pem')); } catch {
+      return this.safeJson(res, 404, { ok: false, error: 'CA certificate not generated' });
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/x-x509-ca-cert',
+      'Content-Length': body.length,
+      'Content-Disposition': 'attachment; filename="dsh-file-station-ca.crt"',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(headOnly ? undefined : body);
   }
 
   /** 返回 PWA 静态文件（只暴露 PWA_ROUTES 白名单里的公开资源）。 */
