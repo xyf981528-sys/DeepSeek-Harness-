@@ -44,6 +44,16 @@ const TEXT_EXT = new Set([
 const PLUGIN_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 /** 默认数据根目录：插件目录下的 data（可用 Config 的 dataDir 覆盖）。 */
 const DEFAULT_DATA_DIR = path.join(PLUGIN_ROOT, 'data');
+/** PWA 静态资源目录（manifest / service worker / 图标）。 */
+const PWA_DIR = path.join(PLUGIN_ROOT, 'pwa');
+/** 允许未鉴权读取的 PWA 资源：路径 → [文件名, Content-Type]。里面不含访问码等秘密。 */
+const PWA_ROUTES = new Map([
+  ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json; charset=utf-8']],
+  ['/sw.js', ['sw.js', 'text/javascript; charset=utf-8']],
+  ['/pwa/icon-192.png', ['icon-192.png', 'image/png']],
+  ['/pwa/icon-512.png', ['icon-512.png', 'image/png']],
+  ['/pwa/apple-touch-icon.png', ['apple-touch-icon.png', 'image/png']],
+]);
 /** 旧版本默认目录（C 盘），首次启动时把内容复制过来。 */
 const LEGACY_DATA_DIR = path.join(os.homedir(), '.dsh', 'file-station');
 /** 更早一版写死的默认目录，同样作为迁移来源。 */
@@ -900,6 +910,10 @@ class FileStation {
     const url = new URL(req.url || '/', 'http://' + (req.headers.host || 'localhost'));
     const route = url.pathname;
     const queryToken = url.searchParams.get('k') || '';
+    // PWA 资源（manifest / SW / 图标）不含秘密，未鉴权也返回，避免浏览器安装检查被 401 打断。
+    if ((req.method === 'GET' || req.method === 'HEAD') && PWA_ROUTES.has(route)) {
+      return this.servePwa(req, res, route, req.method === 'HEAD');
+    }
     if (!this.auth(req, url)) {
       const wait = this.retryAfter(req);
       if (wait > 0) res.setHeader('Retry-After', String(wait));
@@ -1556,6 +1570,27 @@ class FileStation {
 
   openFolder(dir) {
     execFile('explorer.exe', [dir], { windowsHide: false }, () => { /* explorer 退出码不可靠，忽略 */ });
+  }
+
+  /** 返回 PWA 静态文件（只暴露 PWA_ROUTES 白名单里的公开资源）。 */
+  servePwa(req, res, route, headOnly) {
+    const spec = PWA_ROUTES.get(route);
+    if (!spec) return this.safeJson(res, 404, { ok: false, error: 'not found' });
+    let body;
+    try { body = fs.readFileSync(path.join(PWA_DIR, spec[0])); } catch {
+      return this.safeJson(res, 404, { ok: false, error: 'not found' });
+    }
+    const headers = {
+      'Content-Type': spec[1],
+      'Content-Length': body.length,
+      'Cache-Control': route === '/sw.js' ? 'no-store' : route === '/manifest.webmanifest' ? 'no-cache' : 'public, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Referrer-Policy': 'no-referrer',
+    };
+    if (route === '/sw.js') headers['Service-Worker-Allowed'] = '/';
+    res.writeHead(200, headers);
+    res.end(headOnly ? undefined : body);
   }
 
   safeJson(res, code, obj) {

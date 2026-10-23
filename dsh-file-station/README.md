@@ -63,6 +63,25 @@ dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 
   注意 `config` 是整块替换：如果要同时改端口，把 `port` 一起写上。
 
+## 装到手机桌面（PWA，v0.1.2）
+
+手机页现在带 manifest + Service Worker + 图标，浏览器支持时可以直接装到桌面：
+
+- 打开手机页 → Chrome 右上角 ⋮ → **安装应用 / 添加到主屏幕**；
+- 装好后从桌面图标进入，独立窗口、无地址栏（`display: standalone`）；
+- 名称和图标来自 `pwa/manifest.webmanifest`，`pwa/` 里有 192/512/maskable 和 Apple touch 图标；
+- 改了图标重新生成：`python scripts/make-pwa-icons.py`（Pillow）。
+
+**重要限制（HTTPS）**：Chrome 只对「安全上下文」开放 Service Worker 和安装能力——也就是 `https://`，或本机 `http://localhost` / `127.0.0.1`。
+手机用 `http://192.168.x.x:19790` 访问时：
+
+- 页面功能完全正常，manifest 也能读；
+- 但 Service Worker 会被浏览器拒绝注册，**「添加到主屏幕」一般只生成普通快捷方式**（带图标，但仍是浏览器标签页），不是独立窗口。
+
+要真正的独立 App，两条路：给手机端加 HTTPS（自签证书 + 手机安装 CA），或者做 WebView 壳 APK（不受这个限制）。
+
+桌面 Chrome 用 `http://127.0.0.1:19790` 验证过：manifest 200、SW `activated`、`beforeinstallprompt` 会触发。
+
 ## 数据位置
 
 默认是**插件目录下的 `data`**，即 `D:\DeepSeek Y\dsh-file-station\data`（跟随插件所在盘，不再写 C 盘）。

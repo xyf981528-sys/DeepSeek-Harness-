@@ -8,6 +8,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0e13">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="传输台">
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex,nofollow">
 <title>${escapeHtml(title)}</title>
@@ -513,6 +519,15 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   setInterval(function () { loadChat(); }, 4000);
   setInterval(function () { loadRoots(); }, 20000);
 })();
+</script>
+<script>
+// PWA：只在安全上下文（https / localhost）注册；手机用 http://局域网IP 打开时
+// 浏览器会拒绝注册，这行会静默失败，页面功能不受影响。
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () { /* 非安全上下文，忽略 */ });
+  });
+}
 </script>
 </body>
 </html>`;

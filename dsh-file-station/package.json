@@ -1,6 +1,6 @@
 {
   "name": "dsh-file-station",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Phone <-> computer file transfer over the local network, served from the DSH Web GUI",
   "type": "module",
@@ -16,6 +16,7 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "pwa/*",
     "README.md"
   ],
   "dsh": {
