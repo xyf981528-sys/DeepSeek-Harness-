@@ -1,3 +1,6 @@
 - insert:
     - id: file-station
       name: dsh-file-station
+      config:
+        notifyAgent: true
+        notifyAgentMaxChars: 1500

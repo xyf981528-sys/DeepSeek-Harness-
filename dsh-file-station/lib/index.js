@@ -167,6 +167,43 @@ export function apply(ctx, config = {}) {
     throw err;
   }
 
+  // 手机来文字时唤醒当前会话的 Agent：DSH 的 agent.followup() 会把消息塞进
+  // 下一轮 inbox 并唤醒驱动，效果等同于用户在本会话里发了一句。
+  ctx.effect(() => {
+    let liveAgent = null;
+    const hasFollowup = (agent) => Boolean(agent) && typeof agent.followup === 'function';
+    const offCreated = ctx.on('agent/created', ({ agent }) => {
+      if (hasFollowup(agent)) liveAgent = agent;
+    });
+    const offDisposed = ctx.on('agent/disposed', (payload) => {
+      const agent = payload && payload.agent ? payload.agent : payload;
+      if (agent === liveAgent) liveAgent = null;
+    });
+    station.setAgentNotifier((entry) => {
+      if (config.notifyAgent === false) return;
+      const agent = liveAgent;
+      if (!hasFollowup(agent)) return;
+      const max = Number(config.notifyAgentMaxChars) > 0 ? Number(config.notifyAgentMaxChars) : 1500;
+      const body = String(entry.text || '').slice(0, max);
+      const text = '【手机文件传输台】手机端来了一条消息（' + entry.t + '）：\n' + body;
+      try {
+        agent.followup({
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: [{ type: 'text', text }],
+          source: { kind: 'user' },
+        });
+      } catch (err) {
+        try { station.log('AGENT-NOTIFY-ERR: ' + String(err && err.message || err)); } catch { /* ignore */ }
+      }
+    });
+    return () => {
+      try { offCreated(); } catch { /* ignore */ }
+      try { offDisposed(); } catch { /* ignore */ }
+      station.setAgentNotifier(null);
+    };
+  });
+
   ctx.effect(() => {
     const disposers = [];
     try {
@@ -242,6 +279,18 @@ class FileStation {
     this.server = null;
     this.port = 0;
     this.shotInfo = '';
+    this.agentNotifier = null;
+  }
+
+  /** 注册「手机来消息时通知当前 Agent」的回调（由 apply 注入）。 */
+  setAgentNotifier(fn) {
+    this.agentNotifier = typeof fn === 'function' ? fn : null;
+  }
+
+  /** 把一条手机消息交给 Agent 回调；失败不影响收件箱与手机请求。 */
+  announceToAgent(entry) {
+    if (!this.agentNotifier || !entry || entry.from !== 'phone') return;
+    try { this.agentNotifier(entry); } catch { /* notify 失败不影响主流程 */ }
   }
 
   // ---------- 启动 / 停止 ----------
@@ -1218,6 +1267,7 @@ class FileStation {
     const bytes = Buffer.from(text, 'utf8');
     // 进对话流：面板直接显示，默认不生成文件；勾选「存 txt」才额外写文件。
     const entry = this.inboxAppend(text, saveFile, { from: 'phone', kind: notifyPc ? 'msg' : 'text' });
+    this.announceToAgent(entry);
     if (notifyPc) this.notify(text);
     if (!saveFile) {
       this.log('文字(收件箱) ' + bytes.length + ' B');
@@ -1254,7 +1304,8 @@ class FileStation {
     const t = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + ' ' +
       pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
     fs.appendFileSync(this.queueFile, JSON.stringify({ t, text }) + '\n', 'utf8');
-    this.inboxAppend(text, false, { from: 'phone', kind: 'msg' });
+    const entry = this.inboxAppend(text, false, { from: 'phone', kind: 'msg' });
+    this.announceToAgent(entry);
     this.log('留言: ' + text.slice(0, 80));
     this.notify(text);
     return this.safeJson(res, 200, { ok: true, t });
