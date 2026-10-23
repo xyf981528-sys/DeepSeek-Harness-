@@ -3,6 +3,10 @@
 把「文件传输台 v1.2」从 Python 单文件程序改造成 DeepSeek Harness 插件：
 **手机端界面完全保留**（手机浏览器上传/下载/截屏/发文字/留言），控制台从 tkinter 窗口搬进 DSH Web GUI 的整页面板。
 
+![手机端界面](docs/file-station-mobile.png)
+
+*手机浏览器打开访问地址后的界面：截屏、上传、双向对话、下载。*
+
 ## 它做什么
 
 - **手机 → 电脑**：上传文件（边收边写、断点丢弃、磁盘空间检查）、发一段文字存成 `文本-*.txt`、发一条留言（电脑弹窗提醒）。
@@ -13,13 +17,21 @@
 
 ## 安装
 
-两种方式等价，都会把包写进 profile 的 `dsh.profile.bundles`（实测过）：
+三种方式等价，都会把包写进 profile 的 `dsh.profile.bundles`（实测过）。
+
+**从 GitHub 安装（推荐，换机器也能用）**
+
+```powershell
+dsh plugin --profile desktop add "git+https://github.com/xyf981528-sys/DeepSeek-Harness-.git#path:/dsh-file-station"
+```
+
+**从本地目录安装（开发机）**
 
 ```powershell
 dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
 ```
 
-或者：DSH 插件管理器 → 安装本地包 → 选这个目录（等价于 `plugin_manager` 的 `install_bundle`，target 为绝对路径）。
+**在 DSH 界面里装**：插件管理器 → 安装本地包 → 选这个目录（等价于 `plugin_manager` 的 `install_bundle`，target 为绝对路径）。
 
 装完重启 DSH / 刷新 Web GUI，侧边栏会多一个「文件传输台」图标。已验证装好后 profile 里是 junction 链接（改源码即生效），Host 代码改动仍需重启 DSH 才加载。
 

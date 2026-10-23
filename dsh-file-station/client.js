@@ -853,7 +853,12 @@ window.__ModuleLoader__.load({
           }
         };
 
-        // 侧边栏入口已收进 dsh-toolbox（工具箱）；这里只保留 Host 能力，不再注册面板。
+        // 侧边栏入口已收进 dsh-toolbox（工具箱）；详情页仍注册在 main，
+        // 供工具箱的「展开详情」按钮通过 layout.selectPanel('file-station') 打开。
+        ctx.slots.inject('main', () => ctx.slots.register({
+          name: 'main',
+          key: NS,
+        }, () => h(Boundary, null, h(Panel, { ctx }))));
 
         return () => {
           if (typeof disposeStyle === 'function') disposeStyle();
