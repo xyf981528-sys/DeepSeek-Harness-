@@ -126,6 +126,27 @@ python scripts/make-cert.py
 - **IPv6 双栈**：HTTP 与 HTTPS 监听都先绑 `::`（Windows 上同时接受 IPv4），系统不支持时回退 `0.0.0.0`。IPv4 地址不变，局域网里 IPv6-only 的设备也能连。
   - HTTPS 证书目前只签了当前 IPv4/IPv6 回环，**通过 IPv6 访问建议用 HTTP**；要 HTTPS over IPv6，重跑 `scripts/make-cert.py` 时把 IPv6 地址作为参数传进去。
 
+## 设备配对（本机点击确认，v0.4.0）
+
+令牌不再是唯一门槛：新设备第一次打开（扫码或带 `?k=`）会进入「等待电脑确认」页，电脑上弹出「文件传输台 · 设备配对」窗口，点「允许」才放行。
+
+- 点「拒绝」→ 设备标记 `blocked`，手机页显示「电脑已拒绝」，可点「重新申请」再走一次；
+- 本机回环（`127.0.0.1` / `::1`）默认直接放行，方便电脑自己测试；`trustLoopback: false` 可关掉；
+- 设备记录在 `data/_devices.json`（名称 / UA / 状态 / 时间），确认后一年内免重复确认；
+- 未批准设备除 `/pair/status` 外**所有路由 403**，看不到文件列表，也传不了文件；
+- 调试时可设 `pairDialog: false`（只记录不弹窗），不建议在生产用；
+- 关闭整套确认：`requireApproval: false`（会退回旧的「有令牌即放行」行为）。
+
+```yaml
+- id: file-station
+  config:
+    requireApproval: true
+    trustLoopback: true
+    pairDialog: true
+```
+
+升级后第一次连接会弹一次确认，这是预期行为。
+
 ## 数据位置
 
 默认是**插件目录下的 `data`**，即 `D:\DeepSeek Y\dsh-file-station\data`（跟随插件所在盘，不再写 C 盘）。

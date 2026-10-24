@@ -4,3 +4,6 @@
       config:
         notifyAgent: true
         notifyAgentMaxChars: 1500
+        requireApproval: true
+        trustLoopback: true
+        pairDialog: true

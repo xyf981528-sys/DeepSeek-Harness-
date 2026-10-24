@@ -156,7 +156,89 @@ $timer.Start()
 [void]$form.ShowDialog()
 `.trim();
 
+// 配对确认弹窗：手机首次接入时在电脑上弹一个 Yes/No，点「允许」才放行。
+// 纯 ASCII 脚本，中文文案走环境变量，避开 PowerShell 5.1 按 ANSI 读 .ps1 的坑。
+const PAIR_PS = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'DSH File Station'
+$form.StartPosition = 'CenterScreen'
+$form.TopMost = $true
+$form.FormBorderStyle = 'FixedDialog'
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.ClientSize = New-Object System.Drawing.Size(440, 190)
+$title = New-Object System.Windows.Forms.Label
+$title.Text = $env:FS_PAIR_TITLE
+$title.Font = New-Object System.Drawing.Font('Microsoft YaHei', 12, [System.Drawing.FontStyle]::Bold)
+$title.SetBounds(18, 14, 404, 30)
+$msg = New-Object System.Windows.Forms.Label
+$msg.Text = $env:FS_PAIR_MSG
+$msg.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9.5)
+$msg.SetBounds(18, 52, 404, 70)
+$ok = New-Object System.Windows.Forms.Button
+$ok.Text = $env:FS_PAIR_ALLOW
+$ok.SetBounds(150, 136, 120, 34)
+$no = New-Object System.Windows.Forms.Button
+$no.Text = $env:FS_PAIR_DENY
+$no.SetBounds(290, 136, 120, 34)
+$ok.Add_Click({ [IO.File]::WriteAllText($env:FS_PAIR_OUT, '1'); $form.Close() })
+$no.Add_Click({ [IO.File]::WriteAllText($env:FS_PAIR_OUT, '0'); $form.Close() })
+$form.Add_FormClosed({ if (-not (Test-Path $env:FS_PAIR_OUT)) { [IO.File]::WriteAllText($env:FS_PAIR_OUT, '0') } })
+$form.Controls.AddRange(@($title, $msg, $ok, $no))
+$form.Add_Shown({ $form.Activate(); $form.BringToFront() })
+[void]$form.ShowDialog()
+`.trim();
+
+function escapeHtmlText(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export const name = 'dsh-file-station';
+
+/** 未批准设备看到的等待页（不暴露任何文件接口）。 */
+const PAIR_PAGE = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0e13"><meta name="robots" content="noindex,nofollow">
+<title>等待电脑确认</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(700px 380px at 50% 0%,#17253c 0%,#0a0e13 70%);color:#e9eef6;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding:24px}
+  .box{width:100%;max-width:420px;background:rgba(20,26,34,.72);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:22px;backdrop-filter:blur(18px) saturate(1.3)}
+  h1{font-size:19px;margin:8px 0 12px}
+  p{margin:8px 0;color:#c8d2e0}
+  b{color:#fff}
+  .muted{color:#7f8b9c;font-size:12px;word-break:break-all}
+  .dot{width:12px;height:12px;border-radius:50%;background:#ffb020;box-shadow:0 0 0 6px rgba(255,176,32,.12);animation:p 1.4s ease-in-out infinite}
+  @keyframes p{50%{opacity:.35}}
+  button{margin-top:14px;min-height:38px;border:1px solid #2a3646;background:#1d2632;color:#e9eef6;border-radius:11px;padding:8px 16px;font:inherit}
+</style></head><body>
+<div class="box"><div class="dot"></div>
+<h1>等待电脑确认</h1>
+<p>设备：<b>__NAME__</b></p>
+<p>请在电脑上点击「允许」，这个页面会自动刷新。</p>
+<p class="muted">设备 ID：__ID__</p>
+<button id="retry" style="display:none">重新申请</button>
+</div>
+<script>
+(function () {
+  var timer = setInterval(function () {
+    fetch('/pair/status', { headers: { Accept: 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok && j.status === 'approved') { clearInterval(timer); location.replace('/'); }
+      if (j && j.ok && j.status === 'blocked') {
+        clearInterval(timer);
+        document.querySelector('h1').textContent = '电脑已拒绝';
+        document.getElementById('retry').style.display = 'inline-block';
+      }
+    }).catch(function () {});
+  }, 2000);
+  document.getElementById('retry').onclick = function () {
+    fetch('/pair/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then(function () { location.reload(); });
+  };
+})();
+</script></body></html>`;
 export const inject = ['webServer'];
 
 export function apply(ctx, config = {}) {
@@ -174,6 +256,9 @@ export function apply(ctx, config = {}) {
         : DEFAULT_DATA_DIR,
       port: Number(config.port) > 0 ? Number(config.port) : PORT_PREF,
       logger: (line) => ctx.logger ? ctx.logger.info(line) : undefined,
+      requireApproval: config.requireApproval !== false,
+      trustLoopback: config.trustLoopback !== false,
+      pairDialog: config.pairDialog !== false,
     });
   } catch (err) {
     boot('constructor failed: ' + String(err && err.stack || err));
@@ -265,13 +350,16 @@ export function apply(ctx, config = {}) {
 }
 
 class FileStation {
-  constructor({ dataDir, port, logger }) {
+  constructor({ dataDir, port, logger, requireApproval, trustLoopback, pairDialog }) {
     // 装进 profile 时 data 可能是指回 D 盘的目录联接/符号链接，解析成真实路径，
     // 让日志和界面显示真实数据位置（首次运行目录还不存在时忽略）。
     try { dataDir = fs.realpathSync(dataDir); } catch { /* 目录尚未创建 */ }
     this.dataDir = dataDir;
     this.portPref = port;
     this.logger = logger;
+    this.requireApproval = requireApproval !== false;
+    this.trustLoopback = trustLoopback !== false;
+    this.pairDialog = pairDialog !== false;
     this.uploadDir = path.join(dataDir, '上传');
     this.shareDir = path.join(dataDir, '共享');
     this.tokenFile = path.join(dataDir, '_token.txt');
@@ -295,6 +383,10 @@ class FileStation {
     this.port = 0;
     this.shotInfo = '';
     this.agentNotifier = null;
+    this.devices = {};
+    this.devicesSavedAt = 0;
+    this.pairDialogs = new Set();
+    this.loadDevices();
   }
 
   /** 注册「手机来消息时通知当前 Agent」的回调（由 apply 注入）。 */
@@ -306,6 +398,156 @@ class FileStation {
   announceToAgent(entry) {
     if (!this.agentNotifier || !entry || entry.from !== 'phone') return;
     try { this.agentNotifier(entry); } catch { /* notify 失败不影响主流程 */ }
+  }
+
+  // ---------- 设备配对（本机点击确认） ----------
+
+  devicesPath() {
+    return path.join(this.dataDir, '_devices.json');
+  }
+
+  loadDevices() {
+    let list = {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.devicesPath(), 'utf8'));
+      if (raw && raw.devices && typeof raw.devices === 'object') list = raw.devices;
+    } catch { /* 首次运行 */ }
+    this.devices = list;
+  }
+
+  saveDevices(force) {
+    const now = Date.now();
+    if (!force && now - this.devicesSavedAt < 30000) return;
+    this.devicesSavedAt = now;
+    const tmp = this.devicesPath() + '.tmp';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, devices: this.devices }, null, 2), 'utf8');
+      fs.renameSync(tmp, this.devicesPath());
+    } catch { /* ignore */ }
+  }
+
+  cookieValue(req, name) {
+    const header = String(req.headers.cookie || '');
+    for (const part of header.split(';')) {
+      const at = part.indexOf('=');
+      if (at === -1) continue;
+      if (part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
+    }
+    return '';
+  }
+
+  appendCookie(res, cookie) {
+    const prev = res.getHeader('Set-Cookie');
+    const list = prev === undefined ? [] : (Array.isArray(prev) ? prev.slice() : [prev]);
+    list.push(cookie);
+    res.setHeader('Set-Cookie', list);
+  }
+
+  isLoopback(req) {
+    const a = String(req.socket && req.socket.remoteAddress || '');
+    return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+  }
+
+  deviceName(ua) {
+    const s = String(ua || '');
+    const os = /Android/i.test(s) ? 'Android' : /iPhone|iPad/i.test(s) ? 'iOS' : /Windows/i.test(s) ? 'Windows' : '未知设备';
+    const br = /EdgA?\//i.test(s) ? 'Edge' : /Chrome\//i.test(s) ? 'Chrome' : /Safari\//i.test(s) ? 'Safari' : '浏览器';
+    return os + ' · ' + br;
+  }
+
+  /** 给请求分配/识别设备；新设备默认 pending，等待电脑确认。 */
+  identifyDevice(req, res) {
+    let id = this.cookieValue(req, 'did');
+    const ua = String(req.headers['user-agent'] || '');
+    if (!/^[a-f0-9]{32}$/.test(id)) {
+      id = crypto.randomBytes(16).toString('hex');
+      this.appendCookie(res, 'did=' + id + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (365 * 24 * 3600) + (req.socket && req.socket.encrypted ? '; Secure' : ''));
+    }
+    let dev = this.devices[id];
+    if (!dev) {
+      dev = {
+        id,
+        name: this.deviceName(ua),
+        ua: ua.slice(0, 200),
+        status: (!this.requireApproval || (this.trustLoopback && this.isLoopback(req))) ? 'approved' : 'pending',
+        createdAt: Date.now(),
+        lastSeen: Date.now(),
+      };
+      this.devices[id] = dev;
+      this.saveDevices(true);
+      if (dev.status === 'pending') this.requestPair(dev);
+    } else {
+      dev.lastSeen = Date.now();
+      this.saveDevices(false);
+    }
+    return dev;
+  }
+
+  setDeviceStatus(id, status) {
+    const dev = this.devices[id];
+    if (!dev) return;
+    dev.status = status;
+    dev.decidedAt = Date.now();
+    this.saveDevices(true);
+    this.log('PAIR ' + status + ' id=' + id + ' name=' + dev.name);
+  }
+
+  /** 在电脑上弹一次允许/拒绝；结果写进临时文件，由定时器轮询。 */
+  requestPair(dev) {
+    if (!this.pairDialog || this.pairDialogs.has(dev.id)) return;
+    this.pairDialogs.add(dev.id);
+    const out = path.join(this.dataDir, '_pair_' + dev.id + '.txt');
+    try { fs.unlinkSync(out); } catch { /* none */ }
+    const script = path.join(this.dataDir, '_pair.ps1');
+    try { fs.writeFileSync(script, PAIR_PS, 'ascii'); } catch { /* ignore */ }
+    const msg = '新设备「' + dev.name + '」请求连接文件传输台。\n\n' +
+      '只有在你自己发起的连接上才点「允许」。';
+    try {
+      execFile(this.powershellPath(), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
+        env: {
+          ...process.env,
+          FS_PAIR_OUT: out,
+          FS_PAIR_TITLE: '文件传输台 · 设备配对',
+          FS_PAIR_MSG: msg,
+          FS_PAIR_ALLOW: '允许',
+          FS_PAIR_DENY: '拒绝',
+        },
+        windowsHide: true,
+      }, () => { /* 结果看文件 */ });
+    } catch { /* ignore */ }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      let v = '';
+      try { v = fs.readFileSync(out, 'utf8').trim(); } catch { /* wait */ }
+      if (v === '1' || v === '0') {
+        clearInterval(timer);
+        this.pairDialogs.delete(dev.id);
+        this.setDeviceStatus(dev.id, v === '1' ? 'approved' : 'blocked');
+        try { fs.unlinkSync(out); } catch { /* ignore */ }
+        return;
+      }
+      if (Date.now() - started > 120000) {
+        clearInterval(timer);
+        this.pairDialogs.delete(dev.id);
+        this.log('PAIR timeout id=' + dev.id);
+      }
+    }, 500);
+  }
+
+  /** 未批准设备只能看到这一页，别的路由一律拒绝。 */
+  renderPairPage(res, dev) {
+    const body = Buffer.from(PAIR_PAGE
+      .replace('__NAME__', escapeHtmlText(dev.name))
+      .replace('__ID__', escapeHtmlText(dev.id)), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': body.length,
+      'Cache-Control': 'no-store',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+    });
+    res.end(body);
   }
 
   // ---------- 启动 / 停止 ----------
@@ -971,7 +1213,7 @@ class FileStation {
   /** 通过 ?k= 进来时写 HttpOnly Cookie：之后浏览器自动携带，页面 JS 读不到令牌。 */
   setAuthCookie(res, secure) {
     try {
-      res.setHeader('Set-Cookie', 'k=' + this.token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30 * 24 * 3600) + (secure ? '; Secure' : ''));
+      this.appendCookie(res, 'k=' + this.token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30 * 24 * 3600) + (secure ? '; Secure' : ''));
     } catch { /* ignore */ }
   }
 
@@ -1016,6 +1258,26 @@ class FileStation {
         res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
         res.end();
         return;
+      }
+    }
+    // 设备二次确认：令牌只证明拿到了二维码，新设备还要在电脑上点「允许」。
+    if (this.requireApproval) {
+      const dev = this.identifyDevice(req, res);
+      if (route === '/pair/status') {
+        return this.safeJson(res, 200, { ok: true, status: dev.status, id: dev.id, name: dev.name });
+      }
+      if (dev.status !== 'approved') {
+        if (route === '/pair/retry' && req.method === 'POST') {
+          dev.status = 'pending';
+          delete dev.decidedAt;
+          this.saveDevices(true);
+          this.requestPair(dev);
+          return this.safeJson(res, 200, { ok: true, status: 'pending' });
+        }
+        if (req.method === 'GET' && (route === '/' || route === '/index.html')) {
+          return this.renderPairPage(res, dev);
+        }
+        return this.safeJson(res, 403, { ok: false, error: 'device pending approval' });
       }
     }
     if (!/^(GET|HEAD)$/i.test(req.method) && !this.sameSite(req)) {
