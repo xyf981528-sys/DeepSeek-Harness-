@@ -77,6 +77,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   .live{padding:8px 10px;border-radius:10px;background:rgba(20,26,34,.6);border:1px solid rgba(255,255,255,.06);
         font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:0 0 6px;max-height:160px;overflow:auto}
   .live .lt{color:#7f8b9c;font-size:11px;margin-bottom:2px}
+  .chat-img{max-width:100%;max-height:260px;border-radius:10px;display:block;margin-top:4px}
   .item{display:flex;gap:9px;align-items:center;padding:9px 8px;border-radius:11px;overflow:hidden;
         text-decoration:none;color:inherit;transition:background .12s}
   .item:active{background:#1b2430}
@@ -149,6 +150,8 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
     <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
     <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
+    <div class="row" style="margin-top:8px"><button id="b-img">📷 发图片</button><span class="muted" id="s-img"></span></div>
+    <input type="file" id="f-img" accept="image/*" style="display:none">
     <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
   </div>
 
@@ -460,17 +463,26 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       head.textContent = (it.from === 'pc' ? '电脑' : '我') + (it.t ? ' · ' + it.t : '') + (it.kind === 'msg' ? ' · 提醒' : '');
       var body = document.createElement('div');
       body.className = 'cb';
-      body.textContent = it.text || '';
-      body.addEventListener('click', function () {
-        var sel = '';
-        try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
-        if (sel.trim().length) return; // 正在选文字，不抢
-        copyText(it.text || '', function () {
-          var old = head.textContent;
-          head.textContent = old + ' · 已复制';
-          setTimeout(function () { head.textContent = old; }, 1500);
+      if (it.image && it.image.path) {
+        var im = document.createElement('img');
+        im.className = 'chat-img';
+        im.alt = it.image.name || '图片';
+        im.src = '/raw?path=' + encodeURIComponent(it.image.path) + '&t=' + Date.now();
+        im.addEventListener('click', function () { try { window.open(im.src, '_blank'); } catch (e) {} });
+        body.appendChild(im);
+      } else {
+        body.textContent = it.text || '';
+        body.addEventListener('click', function () {
+          var sel = '';
+          try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
+          if (sel.trim().length) return; // 正在选文字，不抢
+          copyText(it.text || '', function () {
+            var old = head.textContent;
+            head.textContent = old + ' · 已复制';
+            setTimeout(function () { head.textContent = old; }, 1500);
+          });
         });
-      });
+      }
       d.appendChild(head);
       d.appendChild(body);
       box.appendChild(d);
@@ -523,6 +535,36 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   }
   loadLive();
   setInterval(loadLive, 2000);
+
+  $('b-img').onclick = function () { $('f-img').click(); };
+  $('f-img').onchange = function () {
+    var f = ($('f-img').files || [])[0];
+    if (!f) return;
+    set('s-img', '处理图片…');
+    var useCompress = !!($('c-compress') && $('c-compress').checked);
+    (useCompress ? compressImage(f) : Promise.resolve(f)).then(function (u) {
+      set('s-img', '上传中…');
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload?to=chat');
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(u.name));
+      xhr.upload.onprogress = function (ev) {
+        if (ev.lengthComputable) set('s-img', '上传中 ' + Math.round(ev.loaded / ev.total * 100) + '%');
+      };
+      xhr.onload = function () {
+        var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 200 && r && r.ok) {
+          set('s-img', '已发送 ' + fmt(r.size || 0));
+          toast('📷 图片已发送', 'ok');
+          $('f-img').value = '';
+          loadChat();
+        } else {
+          set('s-img', '失败：' + ((r && r.error) || xhr.status), 'err');
+        }
+      };
+      xhr.onerror = function () { set('s-img', '网络中断', 'err'); };
+      xhr.send(u);
+    }).catch(function () { set('s-img', '处理失败', 'err'); });
+  };
   $('b-txt').onclick = function () {
     var text = $('t-send').value;
     if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }

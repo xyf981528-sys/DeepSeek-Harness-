@@ -353,7 +353,11 @@ export function apply(ctx, config = {}) {
       }
       const max = Number(config.notifyAgentMaxChars) > 0 ? Number(config.notifyAgentMaxChars) : 1500;
       const body = String(entry.text || '').slice(0, max);
-      const text = '【手机文件传输台】手机端来了一条消息（' + entry.t + '）：\n' + body;
+      const text = entry.image
+        ? '【手机文件传输台】手机发来一张图片（' + entry.t + '）：\n' +
+          path.join(station.dataDir, entry.image.path) +
+          '\n（可用 read_image 查看）'
+        : '【手机文件传输台】手机端来了一条消息（' + entry.t + '）：\n' + body;
       try {
         agent.followup({
           id: crypto.randomUUID(),
@@ -474,6 +478,7 @@ class FileStation {
     this.pairDialog = pairDialog === true;
     this.tunnel = tunnel === true;
     this.uploadDir = path.join(dataDir, '上传');
+    this.chatDir = path.join(dataDir, '上传', '对话图片');
     this.shareDir = path.join(dataDir, '共享');
     this.tokenFile = path.join(dataDir, '_token.txt');
     this.queueFile = path.join(dataDir, '留言.jsonl');
@@ -723,7 +728,7 @@ class FileStation {
   // ---------- 启动 / 停止 ----------
 
   start() {
-    for (const dir of [this.dataDir, this.uploadDir, this.shareDir]) fs.mkdirSync(dir, { recursive: true });
+    for (const dir of [this.dataDir, this.uploadDir, this.shareDir, this.chatDir]) fs.mkdirSync(dir, { recursive: true });
     this.migrateLegacy();
     this.migrateQueueToInbox();
     this.loadToken();
@@ -1298,14 +1303,57 @@ class FileStation {
       + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
+  /** 对话图片落盘后写一条 image 消息并唤醒 Agent。 */
+  chatImageSaved(filePath, size) {
+    const rel = path.relative(this.dataDir, filePath).split(path.sep).join('/');
+    const name = path.basename(filePath);
+    const ext = path.extname(name).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+    const entry = this.inboxAppend('📷 图片', false, {
+      from: 'phone',
+      kind: 'image',
+      image: { path: rel, name, size, mime },
+    });
+    this.announceToAgent(entry);
+    return entry;
+  }
+
+  /** 手机聊天里内联显示对话图片（只允许 上传/对话图片 下的文件）。 */
+  serveChatImage(req, res, url) {
+    const rel = String(url.searchParams.get('path') || '');
+    let real;
+    try { real = fs.realpathSync(path.join(this.dataDir, rel)); } catch {
+      return this.safeJson(res, 404, { ok: false, error: '图片不存在' });
+    }
+    let root = '';
+    try { root = fs.realpathSync(this.chatDir); } catch { /* ignore */ }
+    if (!root || !real.startsWith(root + path.sep)) {
+      return this.safeJson(res, 403, { ok: false, error: '不允许访问' });
+    }
+    let body;
+    try { body = fs.readFileSync(real); } catch {
+      return this.safeJson(res, 404, { ok: false, error: '图片不存在' });
+    }
+    const ext = path.extname(real).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': body.length,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(body);
+  }
+
   inboxAppend(text, saved, meta = {}) {
     const entry = {
       t: this.stamp(),
       from: meta.from === 'pc' ? 'pc' : 'phone',
-      kind: meta.kind === 'msg' ? 'msg' : 'text',
+      kind: meta.kind === 'msg' ? 'msg' : meta.kind === 'image' ? 'image' : 'text',
       text: String(text),
       saved: !!saved,
     };
+    if (meta.image) entry.image = meta.image;
     try {
       fs.appendFileSync(this.inboxFile, JSON.stringify(entry) + '\n', 'utf8');
       const raw = fs.readFileSync(this.inboxFile, 'utf8');
@@ -1364,7 +1412,15 @@ class FileStation {
             text: obj.text,
             saved: !!obj.saved,
             from: obj.from === 'pc' ? 'pc' : 'phone',
-            kind: obj.kind === 'msg' ? 'msg' : 'text',
+            kind: obj.kind === 'msg' ? 'msg' : obj.kind === 'image' ? 'image' : 'text',
+            ...(obj.image && typeof obj.image === 'object' ? {
+              image: {
+                path: String(obj.image.path || ''),
+                name: String(obj.image.name || ''),
+                size: Number(obj.image.size) || 0,
+                mime: String(obj.image.mime || ''),
+              },
+            } : {}),
           });
         }
       } catch { /* 跳过坏行 */ }
@@ -1552,6 +1608,7 @@ class FileStation {
       if (req.method === 'GET' && route === '/state') {
         return this.safeJson(res, 200, { ok: true, queue: this.queueTail(50) });
       }
+      if (req.method === 'GET' && route === '/raw') return this.serveChatImage(req, res, url);
       if (req.method === 'GET' && route === '/live') {
         const after = Number(url.searchParams.get('after') || 0) || 0;
         const all = Array.isArray(this.liveEntries) ? this.liveEntries : [];
@@ -1943,13 +2000,15 @@ class FileStation {
     const name = this.safeName(rawName);
     // 目标目录：默认「上传」（手机传电脑），?to=share 时改为「共享」（电脑拖进来，手机可下载）
     let toShare = !!forceShare;
+    let toChat = false;
     if (!toShare) {
       try {
         const u = new URL(String(req.url || ''), 'http://localhost');
         toShare = u.searchParams.get('to') === 'share';
+        toChat = u.searchParams.get('to') === 'chat';
       } catch { /* 保持默认 */ }
     }
-    const destDir = toShare ? this.shareDir : this.uploadDir;
+    const destDir = toShare ? this.shareDir : (toChat ? this.chatDir : this.uploadDir);
     // Content-Length 可能不存在：浏览器 fetch(File) 常以 chunked 发送。
     // 有就先用它做上限/空间检查，没有就在流式写入时计数并卡 8 GB 上限。
     const declared = Number(req.headers['content-length'] || 0);
@@ -2005,9 +2064,13 @@ class FileStation {
       try { fs.unlinkSync(temp); } catch { /* ignore */ }
       return this.safeJson(res, 500, { ok: false, error: '保存失败：' + String(err && err.message || err) });
     }
-    this.log((toShare ? '共享 ' : '上传 ') + path.basename(finalPath) + ' (' + size + ' B)');
+    this.log((toShare ? '共享 ' : toChat ? '对话图片 ' : '上传 ') + path.basename(finalPath) + ' (' + size + ' B)');
     // 面板靠轮询 status 知道"传完了"，所以把最近一次上传记在状态里
-    this.lastUpload = { name: path.basename(finalPath), size, t: this.stamp(), at: Date.now(), to: toShare ? 'share' : 'upload' };
+    this.lastUpload = { name: path.basename(finalPath), size, t: this.stamp(), at: Date.now(), to: toShare ? 'share' : toChat ? 'chat' : 'upload' };
+    if (toChat) {
+      const entry = this.chatImageSaved(finalPath, size);
+      return this.safeJson(res, 200, { ok: true, chat: true, name: path.basename(finalPath), size, t: entry && entry.t });
+    }
     return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size });
   }
 
