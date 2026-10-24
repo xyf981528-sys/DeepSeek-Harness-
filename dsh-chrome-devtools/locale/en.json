@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Chrome DevTools MCP",
+    "description": "Inspect DOM, network, console and performance over the Chrome DevTools Protocol (uses local Edge, headless and isolated by default)."
+  }
+}

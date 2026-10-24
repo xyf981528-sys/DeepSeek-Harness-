@@ -1,0 +1,18 @@
+- insert:
+    - id: chrome-devtools
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: chrome
+        transport: stdio
+        command: 'E:\D盘文件\nodejs\node.exe'
+        args:
+          - 'D:\DeepSeek Y\tools\npm-global\node_modules\chrome-devtools-mcp\build\src\bin\chrome-devtools-mcp.js'
+          - '--executablePath'
+          - 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+          - '--headless'
+          - '--isolated'
+          - '--no-usage-statistics'
+          - '--no-performance-crux'
+        cwd: 'D:\DeepSeek Y\tools\npm-global'
+        failOnStartupError: false
+        toolCallTimeoutMs: 120000

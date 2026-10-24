@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Chrome DevTools MCP",
+    "description": "用 Chrome DevTools 协议检查页面 DOM、网络、控制台和性能（本机使用 Edge 内核，默认无头、隔离配置）。"
+  }
+}

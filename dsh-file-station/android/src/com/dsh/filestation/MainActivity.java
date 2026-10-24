@@ -88,6 +88,12 @@ public class MainActivity extends Activity {
                 try { self = Uri.parse(view.getUrl()).getHost(); } catch (Exception e) { /* ignore */ }
                 String scheme = u.getScheme() == null ? "" : u.getScheme();
                 if ("http".equals(scheme) || "https".equals(scheme)) {
+                    // 下载链接交给系统浏览器：APK 内 WebView 的 DownloadManager 在部分机型会失败，
+                    // 浏览器路径与手机网页一致，且 ticket URL 不依赖 Cookie。
+                    if (u.getPath() != null && u.getPath().startsWith("/download")) {
+                        openInBrowser(u);
+                        return true;
+                    }
                     if (self != null && host.equals(self)) return false;
                     try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { /* ignore */ }
                     return true;
@@ -157,24 +163,23 @@ public class MainActivity extends Activity {
         });
 
         web.setDownloadListener((url, ua, cd, mime, len) -> {
-            try {
-                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
-                String name = android.webkit.URLUtil.guessFileName(url, cd, mime);
-                req.setTitle(name);
-                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name);
-                String cookie = CookieManager.getInstance().getCookie(url);
-                if (cookie != null) req.addRequestHeader("Cookie", cookie);
-                ((DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(req);
-                Toast.makeText(this, "开始下载：" + name, Toast.LENGTH_SHORT).show();
-            } catch (Exception e) {
-                Toast.makeText(this, "下载失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
-            }
+            openInBrowser(Uri.parse(url));
         });
 
         String url = prefs.getString("url", "");
         if (url.isEmpty()) promptUrl();
         else web.loadUrl(url);
+    }
+
+    private void openInBrowser(Uri uri) {
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, uri);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            Toast.makeText(this, "已交给浏览器下载", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "没有可用的浏览器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void openHttpVersion() {

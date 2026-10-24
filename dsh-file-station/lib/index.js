@@ -1551,6 +1551,13 @@ class FileStation {
     if (req.method === 'POST' && route === '/pair-admin/action') {
       return this.handlePairAdminAction(req, res);
     }
+    // Android DownloadManager 不携带 HttpOnly Cookie：允许短时签名 URL 直接下载。
+    if (req.method === 'GET' && route === '/download') {
+      const p = String(url.searchParams.get('p') || '');
+      const exp = Number(url.searchParams.get('exp') || 0);
+      const sig = String(url.searchParams.get('sig') || '');
+      if (this.validDownloadTicket(p, exp, sig)) return this.handleDownload(req, res, url);
+    }
     if (!this.auth(req, url)) {
       const wait = this.retryAfter(req);
       if (wait > 0) res.setHeader('Retry-After', String(wait));
@@ -1624,6 +1631,7 @@ class FileStation {
         return this.safeJson(res, 200, { ok: true, items: this.inboxList(30) });
       }
       if (req.method === 'GET' && route === '/files') return this.handleFiles(res, url);
+      if (req.method === 'GET' && route === '/download-ticket') return this.handleDownloadTicket(res, url);
       if (req.method === 'GET' && route === '/roots') return this.handleRoots(res);
       if (req.method === 'GET' && route === '/texts') return this.handleTexts(res);
       if (req.method === 'GET' && route === '/text') return this.handleTextRaw(res, url);
@@ -1769,6 +1777,40 @@ class FileStation {
     });
     res.end(body);
     return undefined;
+  }
+
+  downloadSignature(virtual, exp) {
+    return crypto.createHmac('sha256', this.token).update(String(virtual) + '\n' + String(exp)).digest('hex');
+  }
+
+  /** 给 Android DownloadManager 用：短时签名 URL，不依赖 Cookie。 */
+  downloadTicket(virtual) {
+    const exp = Date.now() + 2 * 60 * 1000;
+    const sig = this.downloadSignature(virtual, exp);
+    return '/download?p=' + encodeURIComponent(virtual) + '&exp=' + exp + '&sig=' + sig;
+  }
+
+  validDownloadTicket(virtual, exp, sig) {
+    if (!Number.isFinite(exp) || exp <= Date.now()) return false;
+    if (!/^[a-f0-9]{64}$/i.test(String(sig || ''))) return false;
+    const want = Buffer.from(this.downloadSignature(virtual, exp));
+    const got = Buffer.from(String(sig));
+    return want.length === got.length && crypto.timingSafeEqual(want, got);
+  }
+
+  handleDownloadTicket(res, url) {
+    const virtual = String(url.searchParams.get('p') || '');
+    const { real } = this.toReal(virtual);
+    if (!this.inRoots(real)) return this.safeJson(res, 403, { ok: false, error: '不允许访问这个路径' });
+    let stat;
+    try { stat = fs.statSync(real); } catch { return this.safeJson(res, 404, { ok: false, error: '文件不存在' }); }
+    if (!stat.isFile()) return this.safeJson(res, 404, { ok: false, error: '文件不存在' });
+    return this.safeJson(res, 200, {
+      ok: true,
+      name: path.basename(real),
+      size: stat.size,
+      url: this.downloadTicket(virtual),
+    });
   }
 
   handleDownload(req, res, url) {

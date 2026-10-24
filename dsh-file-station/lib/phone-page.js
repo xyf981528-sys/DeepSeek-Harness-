@@ -1,4 +1,4 @@
-// 手机端单页（移植自 文件传输台 v1.2 的 PAGE，DSH 插件版做了重新设计）
+// 手机端单页（聊天优先版）
 // 纯静态 HTML + 原生 JS，无外部依赖；访问码由服务端写成 HttpOnly Cookie。
 
 export function renderPhonePage({ title = '手机文件传输台' } = {}) {
@@ -19,188 +19,247 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <title>${escapeHtml(title)}</title>
 <style>
   :root{
-    --bg:#0a0e13; --bg2:#0f141b; --card:#141a22; --card2:#182029; --line:#222c38;
+    --bg:#070b10; --panel:#0e151d; --card:#141c26; --line:#223041;
     --text:#e9eef6; --muted:#8c99ab; --brand:#4c8dff; --ok:#46d17f; --err:#ff7b72;
   }
   *{box-sizing:border-box}
+  html,body{height:100%}
   html{-webkit-text-size-adjust:100%}
-  body{margin:0;padding:0 12px calc(26px + env(safe-area-inset-bottom));color:var(--text);
+  body{margin:0;overflow:hidden;color:var(--text);
        font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
        background:
          radial-gradient(900px 420px at 12% -8%,rgba(76,141,255,.18) 0%,rgba(10,14,19,0) 60%),
          radial-gradient(800px 420px at 92% 8%,rgba(124,92,255,.12) 0%,rgba(10,14,19,0) 62%),
-         radial-gradient(1200px 560px at 50% -200px,#17253c 0%,rgba(10,14,19,0) 65%),#0a0e13;
-       background-attachment:fixed}
-  .wrap{max-width:680px;margin:0 auto}
-  .top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
-       padding:calc(10px + env(safe-area-inset-top)) 2px 10px;
-       background:linear-gradient(180deg,rgba(10,14,19,.86) 62%,rgba(10,14,19,.55));
-       backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3)}
+         #0a0e13}
+  [hidden]{display:none!important}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .app{height:100dvh;display:flex;flex-direction:column;max-width:760px;margin:0 auto;position:relative}
+
+  /* 顶部 */
+  .top{display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+       background:rgba(10,14,19,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+       border-bottom:1px solid rgba(255,255,255,.06);z-index:20}
   .logo{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:17px;
-        background:linear-gradient(150deg,#2a5bd7,#4c8dff);box-shadow:0 6px 18px rgba(76,141,255,.35)}
-  .top h1{flex:1;margin:0;font-size:17px;font-weight:650;letter-spacing:.01em}
-  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#c7daff;white-space:nowrap;
-        background:rgba(76,141,255,.12);border:1px solid rgba(76,141,255,.32);padding:4px 9px;border-radius:999px}
+        background:linear-gradient(150deg,#2a5bd7,#4c8dff);box-shadow:0 6px 18px rgba(76,141,255,.3)}
+  .brand{flex:1;min-width:0}
+  .brand h1{margin:0;font-size:16px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brand small{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11.5px;margin-top:1px}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(70,209,127,.15)}
-  .card{background:linear-gradient(180deg,rgba(20,26,34,.74),rgba(24,32,41,.58));
-        border:1px solid rgba(255,255,255,.075);
-        border-radius:16px;padding:14px;margin:0 0 12px;
-        box-shadow:0 12px 34px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.045);
-        backdrop-filter:blur(18px) saturate(1.35);-webkit-backdrop-filter:blur(18px) saturate(1.35)}
-  @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
-    .card{background:linear-gradient(180deg,var(--card),var(--card2))}
-  }
-  .card h2{display:flex;align-items:center;gap:9px;font-size:14.5px;font-weight:640;margin:0 0 11px}
-  .card h2 .ico{width:27px;height:27px;border-radius:9px;display:grid;place-items:center;font-size:14px;
-        background:rgba(76,141,255,.13);border:1px solid rgba(76,141,255,.24)}
-  .muted{color:var(--muted);font-size:13px}
-  .tinytip{font-size:12px;margin-top:6px}
-  button{font:inherit;min-height:38px;border:1px solid var(--line);background:#1d2632;color:var(--text);
-         border-radius:11px;padding:8px 14px;cursor:pointer;
-         transition:transform .08s ease,background .15s ease}
-  button:active{transform:scale(.97);background:#26313f}
-  button.primary{background:linear-gradient(180deg,#5b97ff,#3f7ff0);border-color:#5b97ff;color:#07101f;
-         font-weight:650;box-shadow:0 5px 16px rgba(76,141,255,.26)}
-  button:disabled{opacity:.45;box-shadow:none}
-  textarea{width:100%;min-height:78px;resize:vertical;background:var(--bg2);color:var(--text);
-           border:1px solid var(--line);border-radius:12px;padding:10px;font:inherit;outline:none;
-           transition:border-color .15s,box-shadow .15s}
-  textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(76,141,255,.14)}
-  input[type=file]{width:100%;color:var(--muted);font-size:13px;padding:9px;background:var(--bg2);
-           border:1px dashed #2f3d4f;border-radius:12px}
-  progress{width:100%;height:8px;margin-top:10px;border:0;border-radius:999px;overflow:hidden;background:#1a2330}
+  .task-btn{border:1px solid rgba(76,141,255,.3);background:rgba(76,141,255,.12);color:#c7daff;
+            border-radius:999px;padding:6px 10px;font-size:12px;white-space:nowrap}
+  .task-strip{padding:8px 14px;background:rgba(15,22,31,.94);border-bottom:1px solid var(--line);
+              font-size:12.5px;color:#c8d5e6;max-height:26vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  .task-strip .lt{font-size:10.5px;color:#738196;margin-bottom:2px}
+
+  /* 聊天区 */
+  .chat-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+               padding:14px 14px 8px;scroll-behavior:smooth}
+  .chat-list{display:flex;flex-direction:column;gap:7px;min-height:100%}
+  .empty{margin:auto;text-align:center;color:var(--muted);font-size:13px;line-height:1.8;padding:20px}
+  .time-sep{align-self:center;font-size:11px;color:#64748b;background:rgba(255,255,255,.05);
+            padding:2px 9px;border-radius:999px;margin:4px 0 2px}
+  .msg{display:flex;max-width:100%}
+  .msg.me{justify-content:flex-end}
+  .msg.pc{justify-content:flex-start}
+  .bubble{max-width:84%;padding:9px 12px;border-radius:16px;border:1px solid var(--line);
+          background:var(--card);white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.55;
+          box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  .msg.me .bubble{background:linear-gradient(180deg,#2f6fe4,#2a5fd0);border-color:#4c8dff;color:#fff;
+                  border-bottom-right-radius:5px}
+  .msg.pc .bubble{border-bottom-left-radius:5px}
+  .bubble .meta{display:block;font-size:10.5px;opacity:.62;margin-bottom:2px}
+  .bubble img{display:block;max-width:100%;max-height:300px;border-radius:11px;margin:2px 0 4px}
+  .bubble .cap{font-size:14px;margin-top:2px}
+  .bubble .copyhint{font-size:10.5px;opacity:.55;margin-top:4px}
+
+  /* 附件条 */
+  .attachbar{display:flex;gap:8px;overflow-x:auto;padding:8px 14px;background:rgba(14,21,29,.96);
+             border-top:1px solid rgba(255,255,255,.06)}
+  .att{position:relative;flex:0 0 auto;width:76px;text-align:center}
+  .att .thumb{width:76px;height:64px;border-radius:10px;object-fit:cover;background:#1b2634;border:1px solid var(--line);display:block}
+  .att .fileicon{width:76px;height:64px;border-radius:10px;background:#1b2634;border:1px solid var(--line);
+                 display:grid;place-items:center;font-size:24px}
+  .att .nm{font-size:10.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .att .x{position:absolute;top:-5px;right:-5px;width:22px;height:22px;border-radius:50%;border:1px solid #3a4a5e;
+          background:#101923;color:#cbd5e1;font-size:13px;line-height:1;display:grid;place-items:center;padding:0}
+  .progress-wrap{padding:6px 14px;background:rgba(14,21,29,.96);border-top:1px solid rgba(255,255,255,.05)}
+  .progress-wrap .st{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin-bottom:5px}
+  .progress-wrap .st #s-up{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .progress-wrap .st #b-cancel{min-height:26px;padding:0 9px;border-radius:8px;font-size:11px;border-color:#5a2f2f;color:#ffb4ae;background:#1c1518}
+  progress{width:100%;height:6px;border:0;border-radius:999px;overflow:hidden;background:#1a2330;display:block}
   progress::-webkit-progress-bar{background:#1a2330}
   progress::-webkit-progress-value{background:linear-gradient(90deg,#4c8dff,#8ab6ff);border-radius:999px}
   progress::-moz-progress-bar{background:#4c8dff}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px}
-  .list{margin-top:10px;display:flex;flex-direction:column;gap:3px}
-  .live{padding:8px 10px;border-radius:10px;background:rgba(20,26,34,.6);border:1px solid rgba(255,255,255,.06);
-        font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:0 0 6px;max-height:160px;overflow:auto}
-  .live .lt{color:#7f8b9c;font-size:11px;margin-bottom:2px}
-  .chat-img{max-width:100%;max-height:260px;border-radius:10px;display:block;margin-top:4px}
-  .img-prev{display:flex;gap:8px;align-items:center;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
-  .pending-thumb{width:44px;height:44px;object-fit:cover;border-radius:8px}
-  .img-prev button{min-height:30px;padding:2px 10px}
-  .item{display:flex;gap:9px;align-items:center;padding:9px 8px;border-radius:11px;overflow:hidden;
-        text-decoration:none;color:inherit;transition:background .12s}
-  .item:active{background:#1b2430}
-  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
-  .item .meta{color:var(--muted);font-size:11.5px;white-space:nowrap}
-  .status{margin-top:8px;font-size:12.5px;color:var(--muted);word-break:break-all}
-  .status.ok{color:var(--ok)}
-  .status.err{color:var(--err)}
-  .opt{display:flex;gap:8px;align-items:center;margin-top:9px;font-size:13px;color:var(--muted)}
-  .opt input{accent-color:var(--brand);width:17px;height:17px}
-  #l-chat{max-height:340px;overflow:auto;gap:9px;padding-bottom:2px}
-  .chat{max-width:86%;padding:8px 11px;border-radius:14px;border:1px solid var(--line);background:#111722}
-  .chat.me{margin-left:auto;background:linear-gradient(180deg,#1d2c4d,#182540);
-           border-color:#2c4373;border-bottom-right-radius:5px}
-  .chat.pc{margin-right:auto;border-bottom-left-radius:5px}
-  .chat .ct{font-size:11px;color:var(--muted);margin-bottom:3px}
-  .chat .cb{font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
-  .prebar{position:sticky;top:calc(56px + env(safe-area-inset-top));z-index:5;background:var(--card);
-          padding:8px 0;margin-top:8px;border-bottom:1px solid var(--line)}
-  .pre{max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;white-space:pre-wrap;
-       word-break:break-word;background:var(--bg2);border:1px solid #2f3d4f;border-radius:12px;
-       padding:10px;margin-top:8px;font-size:13px;line-height:1.55;color:var(--text)}
-  .pre::selection,.pre ::selection{background:#2c4373}
-  img.shot{width:100%;border-radius:12px;border:1px solid #2f3d4f;margin-top:10px;display:block;
-           box-shadow:0 8px 20px rgba(0,0,0,.3)}
-  #d-path{display:inline-block;margin-top:9px;padding:4px 9px;border-radius:999px;background:#111a24;
-          border:1px solid var(--line);color:var(--muted);font-size:12px;word-break:break-all}
+
+  /* 输入区 */
+  .composer{display:flex;align-items:flex-end;gap:8px;padding:9px 12px calc(9px + env(safe-area-inset-bottom));
+            background:rgba(12,18,25,.97);border-top:1px solid rgba(255,255,255,.07);
+            backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+  .plus{width:40px;height:40px;flex:0 0 auto;border-radius:50%;border:1px solid #314357;background:#17222f;
+        font-size:23px;line-height:1;display:grid;place-items:center;padding:0}
+  .inputwrap{flex:1;min-width:0;background:#141d28;border:1px solid #26374a;border-radius:20px;padding:5px 11px}
+  textarea{width:100%;min-height:28px;max-height:120px;resize:none;border:0;outline:none;background:transparent;
+           color:var(--text);font:inherit;line-height:1.5;padding:3px 0;display:block}
+  .send{height:40px;flex:0 0 auto;border-radius:20px;border:1px solid #4c8dff;padding:0 15px;
+        background:linear-gradient(180deg,#5b97ff,#3f7ff0);color:#07101f;font-weight:650}
+  .send:disabled{opacity:.45}
+
+  /* 底部工具面板 */
+  .sheet-backdrop{position:fixed;inset:0;z-index:69;background:rgba(0,0,0,.42);
+                  backdrop-filter:blur(1px);-webkit-backdrop-filter:blur(1px)}
+  .sheet{position:fixed;left:0;right:0;bottom:0;z-index:70;max-width:760px;margin:0 auto;
+         background:#0f1722;border-top:1px solid #26374a;border-radius:18px 18px 0 0;
+         padding:10px 14px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -20px 50px rgba(0,0,0,.5);
+         animation:up .18s ease-out}
+  @keyframes up{from{transform:translateY(16px);opacity:.4}to{transform:none;opacity:1}}
+  .sheet .grab{width:38px;height:4px;border-radius:99px;background:#314357;margin:2px auto 12px}
+  .tools{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .tool{display:flex;flex-direction:column;align-items:center;gap:5px;border:0;background:transparent;padding:4px}
+  .tool .ti{width:52px;height:52px;border-radius:16px;background:#17222f;border:1px solid #2a3a4d;
+             display:grid;place-items:center;font-size:23px}
+  .tool span{font-size:11.5px;color:#b9c6d6}
+  .sheet .row2{display:flex;gap:10px;margin-top:14px;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
+  .sheet .row2 label{display:flex;align-items:center;gap:5px}
+  .sheet input[type=checkbox]{accent-color:var(--brand)}
+
+  /* 共享抽屉 */
+  .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60}
+  .drawer{position:fixed;left:0;right:0;bottom:0;z-index:65;max-width:760px;margin:0 auto;
+          height:72dvh;background:#0d141d;border-top:1px solid #2a3a4d;border-radius:18px 18px 0 0;
+          display:flex;flex-direction:column;animation:up .18s ease-out}
+  .drawer .grab{width:38px;height:4px;border-radius:99px;background:#314357;margin:8px auto 4px}
+  .drawer-head{display:flex;align-items:center;gap:8px;padding:6px 14px 8px;border-bottom:1px solid #1e2b3a}
+  .drawer-head strong{flex:1;font-size:14px}
+  .xbtn{border:0;background:transparent;font-size:19px;color:var(--muted);padding:3px 6px}
+  .tabs{display:flex;gap:6px;padding:8px 14px}
+  .tab{border:1px solid #26374a;background:#131d29;color:var(--muted);border-radius:999px;padding:5px 12px;font-size:12px}
+  .tab.on{color:#e9eef6;border-color:#4c8dff;background:rgba(76,141,255,.14)}
+  .drawer-body{flex:1;min-height:0;overflow:auto;padding:2px 14px calc(12px + env(safe-area-inset-bottom))}
+  .list{display:flex;flex-direction:column;gap:2px}
+  .item{display:flex;gap:9px;align-items:center;padding:9px 7px;border-radius:10px;text-decoration:none;color:inherit}
+  .item:active{background:#182331}
+  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
+  .item .meta{color:var(--muted);font-size:11px;white-space:nowrap}
+  .muted{color:var(--muted);font-size:12.5px}
+  .pre{white-space:pre-wrap;word-break:break-word;background:#0b121a;border:1px solid #26374a;border-radius:10px;
+       padding:10px;font-size:12.5px;line-height:1.55;margin-top:8px;max-height:40vh;overflow:auto}
+  .prebar{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .mini{min-height:32px;border-radius:9px;border:1px solid #2a3a4d;background:#17222f;padding:4px 10px;font-size:12px}
+  #d-path{display:inline-block;margin-top:6px;padding:3px 8px;border-radius:999px;background:#111a24;
+          border:1px solid var(--line);color:var(--muted);font-size:11px;word-break:break-all}
   #d-path:empty{display:none}
-  .foot{text-align:center;color:#5d6879;font-size:11.5px;margin:4px 0 8px}
-  .toastwrap{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom));
-       z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;
+  .roots{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+
+  /* 截屏预览 */
+  .shot-modal{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;padding:16px}
+  .shot-modal img{max-width:100%;max-height:88dvh;border-radius:12px;border:1px solid #314357}
+  .shot-modal .xbtn{position:absolute;top:14px;right:16px;font-size:26px;color:#fff}
+
+  .toastwrap{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + env(safe-area-inset-bottom));
+       z-index:90;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;
        width:max-content;max-width:92vw}
-  .toast{background:rgba(24,32,44,.96);border:1px solid #2f3d4f;color:var(--text);font-size:13px;
-       padding:9px 14px;border-radius:999px;box-shadow:0 10px 26px rgba(0,0,0,.42);
+  .toast{background:rgba(24,32,44,.97);border:1px solid #2f3d4f;color:var(--text);font-size:12.5px;
+       padding:8px 13px;border-radius:999px;box-shadow:0 10px 26px rgba(0,0,0,.42);
        animation:toastin .18s ease-out;max-width:92vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .toast.ok{border-color:rgba(70,209,127,.5);color:#b8f5d0}
   .toast.err{border-color:rgba(255,123,114,.55);color:#ffc9c4}
   @keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important;animation:none!important;scroll-behavior:auto!important} }
 </style>
 </head>
 <body>
-<div class="wrap">
-
-  <div class="top">
+<div class="app">
+  <header class="top">
     <div class="logo">📡</div>
-    <h1>${escapeHtml(title)}</h1>
-    <span class="pill"><span class="dot"></span>已连接</span>
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">📷</span>电脑截屏</h2>
-    <div class="row"><button class="primary" id="b-shot">截一张给我看</button><span class="muted" id="s-shot"></span></div>
-    <img class="shot" id="img-shot" alt="" style="display:none">
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">⬆</span>上传文件到电脑</h2>
-    <input type="file" id="f-up" multiple>
-    <label class="opt"><input type="checkbox" id="c-compress" checked> 上传前压缩图片（长边 1600，转为 JPEG）</label>
-    <div class="row" style="margin-top:10px"><button class="primary" id="b-up">开始上传</button><button id="b-cancel" style="display:none">取消</button><span class="muted" id="s-up"></span></div>
-    <progress id="p-up" value="0" max="100" style="display:none"></progress>
-    <div class="muted tinytip">大文件自动分片（1 MB/片），断网后重新选同一个文件会从断点继续。</div>
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">💬</span>和电脑对话</h2>
-    <div class="list" id="l-chat"></div>
-    <div class="muted tinytip">点一条消息即可复制它的内容</div>
-    <textarea id="t-send" placeholder="写点什么：发出后电脑面板里直接显示，电脑回的话也会出现在上面"></textarea>
-    <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
-    <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
-    <div class="row" style="margin-top:8px"><button id="b-img">📷 发图片</button><span class="muted" id="s-img"></span></div>
-    <input type="file" id="f-img" accept="image/*" style="display:none">
-    <div id="img-prev" class="img-prev" style="display:none"></div>
-    <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><button id="b-clear">清空对话</button><span class="muted" id="s-txt"></span></div>
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">🖥</span>实时输出</h2>
-    <div class="list" id="l-live"></div>
-    <div class="muted tinytip">每 2 秒刷新，只读：当前会话最近的助手文本与工具调用。</div>
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">⬇</span>电脑上的文件</h2>
-    <div class="row" id="b-roots"></div>
-    <div class="list" id="l-files"></div>
-    <div id="d-path"></div>
-  </div>
-
-  <div class="card">
-    <h2><span class="ico">📄</span>电脑上的文字</h2>
-    <div class="list" id="l-texts"></div>
-    <!-- 操作条放在正文上方：长按选中后系统菜单通常弹在下方，不会盖住这两个按钮 -->
-    <div class="row prebar" id="p-actions" style="display:none">
-      <button class="primary" id="b-copy">📋 复制全文</button>
-      <button id="b-selall">全选</button>
-      <span class="muted" id="s-text"></span>
+    <div class="brand">
+      <h1>${escapeHtml(title)}</h1>
+      <small><span class="dot"></span>同一 WiFi 直连电脑 · 不经过云端</small>
     </div>
-    <pre id="p-text" class="pre" style="display:none"></pre>
-    <div class="muted tinytip" id="hint-text" style="display:none">点一下正文即可复制全文；长按可手动选择文字。</div>
+    <button type="button" class="task-btn" id="b-task" hidden>当前任务</button>
+  </header>
+
+  <div class="task-strip" id="task-strip" hidden>
+    <div class="lt" id="l-live-time"></div>
+    <div id="l-live"></div>
   </div>
 
-  <div class="foot">同一 WiFi 直连电脑 · 不经过云端</div>
+  <main class="chat-scroll" id="chat-scroll">
+    <div class="chat-list" id="l-chat"></div>
+  </main>
+
+  <div class="attachbar" id="attachbar" hidden></div>
+  <div class="progress-wrap" id="progress-wrap" hidden>
+    <div class="st"><span id="s-up"></span><button type="button" id="b-cancel" hidden>取消</button></div>
+    <progress id="p-up" value="0" max="100"></progress>
+  </div>
+
+  <footer class="composer">
+    <button type="button" class="plus" id="b-tools" aria-label="更多工具">＋</button>
+    <div class="inputwrap">
+      <textarea id="t-send" rows="1" placeholder="发消息给电脑…"></textarea>
+    </div>
+    <button type="button" class="send" id="b-txt">发送</button>
+  </footer>
 </div>
+
+<div class="sheet-backdrop" id="tools-backdrop" hidden></div>
+<div class="sheet" id="tools-sheet" hidden>
+  <div class="grab"></div>
+  <div class="tools">
+    <button type="button" class="tool" id="tool-image"><span class="ti">🖼️</span><span>图片</span></button>
+    <button type="button" class="tool" id="tool-file"><span class="ti">📎</span><span>文件</span></button>
+    <button type="button" class="tool" id="tool-shot"><span class="ti">🖥️</span><span>截屏</span></button>
+    <button type="button" class="tool" id="tool-share"><span class="ti">📁</span><span>共享文件</span></button>
+  </div>
+  <div class="row2">
+    <label><input type="checkbox" id="c-compress" checked> 压缩图片</label>
+    <label><input type="checkbox" id="c-save"> 存成 txt</label>
+    <label><input type="checkbox" id="c-notify"> 电脑提醒</label>
+    <button type="button" class="mini" id="b-clear" style="margin-left:auto;border-color:#5a2f2f;color:#ffb4ae">清空对话</button>
+  </div>
+  <input type="file" id="f-img" accept="image/*" multiple hidden>
+  <input type="file" id="f-up" multiple hidden>
+</div>
+
+<div class="backdrop" id="drawer-backdrop" hidden></div>
+<div class="drawer" id="share-drawer" hidden>
+  <div class="grab"></div>
+  <div class="drawer-head"><strong>电脑上的文件</strong><button type="button" class="xbtn" id="drawer-close">✕</button></div>
+  <div class="tabs">
+    <button type="button" class="tab on" id="tab-files">文件</button>
+    <button type="button" class="tab" id="tab-texts">文字</button>
+  </div>
+  <div class="drawer-body">
+    <div id="pane-files">
+      <div class="roots" id="b-roots"></div>
+      <div class="list" id="l-files"></div>
+      <div id="d-path"></div>
+    </div>
+    <div id="pane-texts" hidden>
+      <div class="list" id="l-texts"></div>
+      <div class="prebar" id="p-actions" hidden>
+        <button type="button" class="mini" id="b-copy">📋 复制全文</button>
+        <button type="button" class="mini" id="b-selall">全选</button>
+        <span class="muted" id="s-text"></span>
+      </div>
+      <pre class="pre" id="p-text" hidden></pre>
+      <div class="muted" id="hint-text" hidden>点正文复制全文；长按可手动选择。</div>
+    </div>
+  </div>
+</div>
+
+<div class="shot-modal" id="shot-modal" hidden>
+  <button type="button" class="xbtn" id="shot-close">✕</button>
+  <img id="img-shot" alt="电脑截屏">
+</div>
+
 <div class="toastwrap" id="toastwrap"></div>
 
 <script>
 (function () {
   'use strict';
-  // 访问码由服务端写成 HttpOnly Cookie（页面 JS 读不到），这里的请求靠浏览器自动携带。
-  // 打开 ?k=... 时服务端会写 Cookie 并 302 到 /，所以地址栏和 history 里不会留令牌。
-  function qs(extra) { return extra ? '?' + extra : ''; }
   function $(id) { return document.getElementById(id); }
-  function set(id, text, cls) {
-    var el = $(id); if (!el) return;
-    el.textContent = text || '';
-    el.className = 'muted' + (cls ? ' ' + cls : '');
-  }
+  function qs(extra) { return extra ? '?' + extra : ''; }
   function fmt(b) {
     b = Number(b) || 0;
     if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
@@ -208,73 +267,221 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     if (b >= 1024) return Math.round(b / 1024) + ' KB';
     return b + ' B';
   }
-  function api(path, body) {
-    return fetch(path + qs(), body === undefined ? {} : {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
-  }
-  // 轻提示：传输完成/失败都在屏幕下方冒一条，不打断操作
   function toast(text, kind) {
-    var box = $('toastwrap');
-    if (!box) return;
+    var box = $('toastwrap'); if (!box) return;
     var el = document.createElement('div');
     el.className = 'toast' + (kind ? ' ' + kind : '');
     el.textContent = text;
     box.appendChild(el);
     setTimeout(function () {
-      el.style.opacity = '0';
-      el.style.transition = 'opacity .2s ease';
+      el.style.opacity = '0'; el.style.transition = 'opacity .2s ease';
       setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
     }, 2600);
   }
-  // ---- 截屏 ----
-  $('b-shot').onclick = function () {
-    var b = $('b-shot'); b.disabled = true; set('s-shot', '正在截屏…');
-    api('/shot', {}).then(function (r) {
-      if (r.ok) {
-        set('s-shot', '已截屏 ' + (r.size || ''));
-        var img = $('img-shot');
-        img.src = '/shot.png' + qs('t=' + Date.now());
-        img.style.display = 'block';
-      } else set('s-shot', r.error || '截屏失败', 'err');
-    }).catch(function (e) { set('s-shot', String(e), 'err'); })
-      .then(function () { b.disabled = false; });
+  function api(path, body) {
+    return fetch(path + qs(), body === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
+  }
+  function copyText(text, onOk, onFail) {
+    if (!text) { if (onFail) onFail(); return; }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;height:1px;width:1px';
+      document.body.appendChild(ta); ta.select();
+      try { ta.setSelectionRange(0, ta.value.length); } catch (e) {}
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      if (ok) { if (onOk) onOk(); } else if (onFail) onFail();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { if (onOk) onOk(); }, fallback);
+    } else fallback();
+  }
+
+  // ---------- 聊天 ----------
+  var chat = [], seen = {}, lastDoneT = '';
+  function keyOf(it) { return [it.from, it.t, it.text, it.image && it.image.path].join('|'); }
+  function scrollBottom() {
+    requestAnimationFrame(function () {
+      var s = $('chat-scroll'); if (s) s.scrollTop = s.scrollHeight;
+    });
+  }
+  function fmtTimeLabel(t) {
+    var s = String(t || '');
+    var m = s.match(/(\\d{1,2}:\\d{2})/);
+    return m ? m[1] : s.slice(-5);
+  }
+  function messageNode(it) {
+    var wrap = document.createElement('div');
+    wrap.className = 'msg ' + (it.from === 'pc' ? 'pc' : 'me');
+    var b = document.createElement('div');
+    b.className = 'bubble';
+    if (it.t) {
+      var meta = document.createElement('span');
+      meta.className = 'meta'; meta.textContent = fmtTimeLabel(it.t);
+      b.appendChild(meta);
+    }
+    if (it.image && it.image.path) {
+      var im = document.createElement('img');
+      im.alt = it.image.name || '图片';
+      im.src = '/raw?path=' + encodeURIComponent(it.image.path);
+      im.addEventListener('click', function () { try { window.open(im.src, '_blank'); } catch (e) {} });
+      b.appendChild(im);
+      if (it.text && it.text !== '📷 图片') {
+        var cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = it.text; b.appendChild(cap);
+      }
+    } else {
+      var txt = document.createElement('div'); txt.textContent = it.text || ''; b.appendChild(txt);
+      var hint = document.createElement('div'); hint.className = 'copyhint'; hint.textContent = '点一下复制';
+      b.appendChild(hint);
+      b.addEventListener('click', function () {
+        var sel = ''; try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
+        if (sel.trim().length) return;
+        copyText(it.text || '', function () { toast('已复制', 'ok'); }, function () { toast('复制失败', 'err'); });
+      });
+    }
+    wrap.appendChild(b);
+    return wrap;
+  }
+  function appendMessage(it, prevT) {
+    var list = $('l-chat'); if (!list) return;
+    var t = fmtTimeLabel(it.t);
+    if (t && t !== prevT) {
+      var sep = document.createElement('div'); sep.className = 'time-sep'; sep.textContent = t;
+      list.appendChild(sep);
+    }
+    list.appendChild(messageNode(it));
+  }
+  function renderEmpty() {
+    var list = $('l-chat'); if (!list) return;
+    list.textContent = '';
+    var d = document.createElement('div'); d.className = 'empty';
+    d.textContent = '还没有对话。\\n在下面发消息、图片或文件给电脑。';
+    list.appendChild(d);
+  }
+  function loadChat() {
+    return fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok || !Array.isArray(r.items)) return;
+      var items = r.items.slice().reverse();
+      var done = null;
+      for (var i = 0; i < r.items.length; i++) {
+        var x = r.items[i];
+        if (x && x.from === 'pc' && String(x.text || '').indexOf('✅ 任务已完成') === 0) { done = x; break; }
+      }
+      if (done && done.t !== lastDoneT) {
+        lastDoneT = done.t; toast('✅ 任务已完成', 'ok');
+        try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
+      }
+      var keys = items.map(keyOf);
+      var missing = false;
+      for (var k in seen) { if (keys.indexOf(k) < 0) { missing = true; break; } }
+      if (missing) { chat = []; seen = {}; $('l-chat').textContent = ''; }
+      if (!items.length) { if (!chat.length) renderEmpty(); return; }
+      var emptyEl = $('l-chat').querySelector('.empty');
+      if (emptyEl) emptyEl.parentNode.removeChild(emptyEl);
+      var prevT = '';
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j], kk = keyOf(it);
+        if (seen[kk]) { prevT = fmtTimeLabel(it.t); continue; }
+        appendMessage(it, prevT);
+        prevT = fmtTimeLabel(it.t);
+        seen[kk] = 1;
+        chat.push(it);
+      }
+      if (chat.length) scrollBottom();
+    }).catch(function () {});
+  }
+
+  // ---------- 实时任务条 ----------
+  var liveSeq = 0;
+  function loadLive() {
+    return fetch('/live?after=0').then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok || !Array.isArray(r.items) || !r.items.length) return;
+      var last = r.items[r.items.length - 1];
+      if (!last || !last.text || last.seq === liveSeq) return;
+      liveSeq = last.seq;
+      $('b-task').hidden = false;
+      $('task-strip').hidden = false;
+      $('l-live-time').textContent = '当前任务 · ' + new Date(last.at || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+      $('l-live').textContent = last.text;
+    }).catch(function () {});
+  }
+  $('b-task').onclick = function () {
+    var s = $('task-strip');
+    s.hidden = !s.hidden;
   };
 
-  // ---- 上传（小文件直传；大文件 1 MB 分片 + 断点续传 + 可取消） ----
+  // ---------- 附件 ----------
+  var attach = [];
+  function renderAttach() {
+    var bar = $('attachbar'); if (!bar) return;
+    bar.textContent = '';
+    bar.hidden = !attach.length;
+    attach.forEach(function (a, i) {
+      var d = document.createElement('div'); d.className = 'att';
+      if (a.kind === 'image') {
+        var im = document.createElement('img'); im.className = 'thumb'; im.src = a.url; im.alt = a.file.name;
+        d.appendChild(im);
+      } else {
+        var ic = document.createElement('div'); ic.className = 'fileicon'; ic.textContent = '📄';
+        d.appendChild(ic);
+      }
+      var nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = a.file.name; nm.title = a.file.name;
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'x'; x.textContent = '✕';
+      x.onclick = function () { removeAttach(i); };
+      d.appendChild(nm); d.appendChild(x);
+      bar.appendChild(d);
+    });
+  }
+  function addFiles(files) {
+    var arr = Array.prototype.slice.call(files || []);
+    if (!arr.length) return;
+    arr.forEach(function (f) {
+      if (attach.length >= 9) return;
+      var isImg = String(f.type || '').indexOf('image/') === 0;
+      attach.push({ file: f, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : '' });
+    });
+    renderAttach();
+    $('f-img').value = ''; $('f-up').value = '';
+    if (attach.length) toast('已添加 ' + attach.length + ' 个附件');
+  }
+  function removeAttach(i) {
+    var a = attach[i]; if (!a) return;
+    if (a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} }
+    attach.splice(i, 1);
+    renderAttach();
+  }
+  function clearAttach() {
+    attach.forEach(function (a) { if (a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} } });
+    attach = [];
+    renderAttach();
+  }
+
+  // ---------- 上传 ----------
   var CHUNK_BYTES = 1024 * 1024;
   var CHUNK_MIN = 6 * 1024 * 1024;
-  var upState = null; // { cancel, xhr, uploadId, file }
-
+  var upState = null;
   function upKey(f) { return 'fsc:' + f.name + ':' + f.size + ':' + (f.lastModified || 0); }
   function upLoadResume(f) {
     try {
-      var raw = localStorage.getItem(upKey(f));
-      if (!raw) return null;
+      var raw = localStorage.getItem(upKey(f)); if (!raw) return null;
       var s = JSON.parse(raw);
       if (!s || !/^[a-f0-9]{32}$/.test(s.id || '') || s.chunk !== CHUNK_BYTES) return null;
       return s;
     } catch (e) { return null; }
   }
-  function upSaveResume(f, s) {
-    try { localStorage.setItem(upKey(f), JSON.stringify(s)); } catch (e) {}
-  }
-  function upClearResume(f) {
-    try { localStorage.removeItem(upKey(f)); } catch (e) {}
-  }
+  function upSaveResume(f, s) { try { localStorage.setItem(upKey(f), JSON.stringify(s)); } catch (e) {} }
+  function upClearResume(f) { try { localStorage.removeItem(upKey(f)); } catch (e) {} }
   function randomId() {
     var a = new Uint8Array(16);
     (window.crypto || window.msCrypto).getRandomValues(a);
     return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
   }
   function postJson(url, obj) {
-    return fetch(url + qs(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(obj)
-    }).then(function (r) { return r.json().catch(function () { return {}; }); });
+    return fetch(url + qs(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) })
+      .then(function (r) { return r.json().catch(function () { return {}; }); });
   }
   function sendChunk(f, id, index, total, onProgress) {
     return new Promise(function (resolve, reject) {
@@ -312,38 +519,32 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       if (i >= total) {
         return postJson('/upload/complete', { uploadId: s.id, name: f.name, total: total, size: f.size }).then(function (r) {
           if (!r || !r.ok) {
-            var err = new Error((r && r.error) || '合并失败');
-            err.missing = !!(r && r.missing);
-            throw err;
+            var err = new Error((r && r.error) || '合并失败'); err.missing = !!(r && r.missing); throw err;
           }
-          upClearResume(f);
-          return r;
+          upClearResume(f); return r;
         });
       }
       upSaveResume(f, s);
       return sendChunk(f, s.id, i, total, function (loaded, len) { prog(i + loaded / len); }).then(function () {
-        s.done = i + 1;
-        upSaveResume(f, s);
-        prog(s.done);
-        return run();
+        s.done = i + 1; upSaveResume(f, s); prog(s.done); return run();
       });
     }
     return Promise.resolve().then(run).catch(function (err) {
       if (err && err.missing && !restarted) {
-        restarted = true;
-        s = { id: randomId(), chunk: CHUNK_BYTES, total: total, done: 0 };
+        restarted = true; s = { id: randomId(), chunk: CHUNK_BYTES, total: total, done: 0 };
         if (upState) upState.uploadId = s.id;
         return run();
       }
       throw err;
     });
   }
-  function uploadSingle(f, prog) {
+  function uploadSingle(f, toChat, caption, prog) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
       if (upState) { upState.xhr = xhr; upState.file = f; }
-      xhr.open('POST', '/upload' + qs());
+      xhr.open('POST', '/upload' + qs(toChat ? 'to=chat' : ''));
       xhr.setRequestHeader('X-Filename', encodeURIComponent(f.name));
+      if (toChat) xhr.setRequestHeader('X-Caption', encodeURIComponent(caption || ''));
       xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) prog(ev.loaded / ev.total); };
       xhr.onload = function () {
         var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
@@ -355,11 +556,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       xhr.send(f);
     });
   }
-
-  /** 拍照/相册图片上传前压到长边 1600、JPEG 0.9；GIF/SVG/解码失败时原样返回。 */
   function compressImage(f) {
-    if (!/^image\\//i.test(f.type)) return Promise.resolve(f);
-    if (/image\\/(gif|svg\\+xml)/i.test(f.type)) return Promise.resolve(f);
+    if (String(f.type || '').indexOf('image/') !== 0) return Promise.resolve(f);
+    if (String(f.type || '').indexOf('gif') >= 0 || String(f.type || '').indexOf('svg') >= 0) return Promise.resolve(f);
     if (f.size < 300 * 1024) return Promise.resolve(f);
     if (typeof createImageBitmap !== 'function') return Promise.resolve(f);
     return createImageBitmap(f).then(function (bmp) {
@@ -368,8 +567,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       if (scale >= 1 && f.size < 2 * 1024 * 1024) { if (bmp.close) bmp.close(); return f; }
       var w = Math.max(1, Math.round(bmp.width * scale));
       var h = Math.max(1, Math.round(bmp.height * scale));
-      var canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
+      var canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
       if (bmp.close) bmp.close();
       return new Promise(function (resolve) {
@@ -382,435 +580,337 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       });
     }).catch(function () { return f; });
   }
-
-  $('b-up').onclick = function () {
-    var files = Array.prototype.slice.call($('f-up').files || []);
-    if (!files.length) { set('s-up', '先选文件', 'err'); return; }
-    if (upState) return;
-    upState = { cancel: false, xhr: null, uploadId: null, file: null };
-    var cancelBtn = $('b-cancel');
-    if (cancelBtn) cancelBtn.style.display = '';
-    var bar = $('p-up');
-    bar.style.display = 'block'; bar.value = 0;
-    var i = 0, totalMB = 0;
-    $('b-up').disabled = true;
-    function finish() {
-      upState = null;
-      $('b-up').disabled = false;
-      if (cancelBtn) cancelBtn.style.display = 'none';
-      bar.style.display = 'none';
-      $('f-up').value = '';
-    }
-    function next() {
-      if (i >= files.length) {
-        set('s-up', '全部上传完成：' + totalMB.toFixed(1) + ' MB', 'ok');
-        toast('✅ 全部 ' + files.length + ' 个文件已传完（' + totalMB.toFixed(1) + ' MB）', 'ok');
-        finish();
-        loadFiles(currentDir);
-        return;
-      }
-      var f = files[i];
-      var label = '(' + (i + 1) + '/' + files.length + ') ' + f.name;
-      set('s-up', label);
-      var pct = function (frac) {
-        if (!upState || upState.cancel) return;
-        var p = Math.max(0, Math.min(100, Math.round(frac * 100)));
-        bar.value = p;
-        set('s-up', label + ' ' + p + '%');
-      };
-      var prep = ($('c-compress') && $('c-compress').checked) ? compressImage(f) : Promise.resolve(f);
-      prep.then(function (u) {
-        if (u !== f) label += ' → ' + u.name + '（' + (u.size / 1048576).toFixed(1) + ' MB）';
-        set('s-up', label);
-        var job = u.size > CHUNK_MIN
-          ? uploadChunked(u, function (done) { pct(done / Math.max(1, Math.ceil(u.size / CHUNK_BYTES))); })
-          : uploadSingle(u, pct);
-        return job.then(function () {
-          totalMB += u.size / 1048576;
-          i++;
-          toast('✅ ' + u.name + ' 已传完', 'ok');
-          next();
-        });
-      }).catch(function (err) {
-        if (upState && upState.cancel) set('s-up', '已取消', 'err');
-        else { set('s-up', f.name + ' 上传失败：' + (err && err.message || err), 'err'); toast('❌ ' + f.name + ' 上传失败', 'err'); }
-        finish();
-      });
-    }
-    next();
-  };
-
+  function showProgress(label, frac) {
+    $('progress-wrap').hidden = false;
+    $('b-cancel').hidden = false;
+    $('s-up').textContent = label;
+    $('p-up').value = Math.max(0, Math.min(100, Math.round((frac || 0) * 100)));
+  }
+  function hideProgress() {
+    $('progress-wrap').hidden = true;
+    $('b-cancel').hidden = true;
+  }
   $('b-cancel').onclick = function () {
     if (!upState) return;
     upState.cancel = true;
     try { if (upState.xhr) upState.xhr.abort(); } catch (e) {}
-    var id = upState.uploadId;
-    var f = upState.file;
-    if (f) upClearResume(f);
-    if (id) postJson('/upload/abort', { uploadId: id }).catch(function () {});
+    toast('正在取消…');
   };
 
-  // ---- 对话（文字 / 留言，双向） ----
-  // 默认只进对话流，不落文件；勾选「存成 txt」才额外写文件，勾选「弹窗提醒」让电脑响铃弹窗。
-  var chat = [];
-  var lastDoneT = '';
-  function renderChat() {
-    var box = $('l-chat');
-    if (!box) return;
-    box.textContent = '';
-    // 新消息在下，像聊天软件一样往上滚
-    chat.slice(-30).forEach(function (it) {
-      var d = document.createElement('div');
-      d.className = 'chat ' + (it.from === 'pc' ? 'pc' : 'me');
-      var head = document.createElement('div');
-      head.className = 'ct';
-      head.textContent = (it.from === 'pc' ? '电脑' : '我') + (it.t ? ' · ' + it.t : '') + (it.kind === 'msg' ? ' · 提醒' : '');
-      var body = document.createElement('div');
-      body.className = 'cb';
-      if (it.image && it.image.path) {
-        var im = document.createElement('img');
-        im.className = 'chat-img';
-        im.alt = it.image.name || '图片';
-        im.src = '/raw?path=' + encodeURIComponent(it.image.path) + '&t=' + Date.now();
-        im.addEventListener('click', function () { try { window.open(im.src, '_blank'); } catch (e) {} });
-        body.appendChild(im);
-        if (it.text && it.text !== '📷 图片') {
-          var cap = document.createElement('div');
-          cap.textContent = it.text;
-          cap.style.marginTop = '4px';
-          body.appendChild(cap);
-        }
-      } else {
-        body.textContent = it.text || '';
-        body.addEventListener('click', function () {
-          var sel = '';
-          try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
-          if (sel.trim().length) return; // 正在选文字，不抢
-          copyText(it.text || '', function () {
-            var old = head.textContent;
-            head.textContent = old + ' · 已复制';
-            setTimeout(function () { head.textContent = old; }, 1500);
-          });
+  function uploadOne(f, toChat, caption, index, totalCount) {
+    if (upState && upState.cancel) return Promise.reject(new Error('已取消'));
+    var label = '(' + index + '/' + totalCount + ') ' + f.name;
+    showProgress(label, 0);
+    var prep = (toChat && $('c-compress') && $('c-compress').checked) ? compressImage(f) : Promise.resolve(f);
+    return prep.then(function (u) {
+      if (u !== f) label += ' → ' + u.name;
+      if (!toChat && u.size > CHUNK_MIN) {
+        return uploadChunked(u, function (done) {
+          showProgress(label + ' ' + Math.round(done / Math.max(1, Math.ceil(u.size / CHUNK_BYTES)) * 100) + '%', done / Math.max(1, Math.ceil(u.size / CHUNK_BYTES)));
         });
       }
-      d.appendChild(head);
-      d.appendChild(body);
-      box.appendChild(d);
+      return uploadSingle(u, toChat, caption, function (frac) {
+        showProgress(label + ' ' + Math.round(frac * 100) + '%', frac);
+      });
     });
-    box.scrollTop = box.scrollHeight;
   }
-  function loadChat() {
-    return fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
-      if (r && r.ok && r.items) {
-        var done = null;
-        for (var k = 0; k < r.items.length; k++) {
-          var it = r.items[k];
-          if (it && it.from === 'pc' && String(it.text || '').indexOf('✅ 任务已完成') === 0) { done = it; break; }
-        }
-        if (done && done.t !== lastDoneT) {
-          lastDoneT = done.t;
-          toast('✅ 任务已完成', 'ok');
-          try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
-        }
-        // 接口返回新→旧，这里转成旧→新
-        chat = r.items.slice().reverse();
-        renderChat();
+
+  function sendAll() {
+    if (upState) return;
+    var text = $('t-send').value.trim();
+    var imgs = attach.filter(function (a) { return a.kind === 'image'; });
+    var files = attach.filter(function (a) { return a.kind === 'file'; });
+    if (!imgs.length && !files.length) {
+      if (!text) { toast('先写点内容', 'err'); return; }
+      sendText(text);
+      return;
+    }
+    upState = { cancel: false, xhr: null, uploadId: null, file: null };
+    $('b-txt').disabled = true;
+    var total = imgs.length + files.length;
+    var idx = 0;
+    var caption = text;
+    var chain = Promise.resolve();
+    imgs.forEach(function (a) {
+      chain = chain.then(function () {
+        idx++;
+        return uploadOne(a.file, true, caption, idx, total).then(function () { caption = ''; });
+      });
+    });
+    files.forEach(function (a) {
+      chain = chain.then(function () {
+        idx++;
+        return uploadOne(a.file, false, '', idx, total);
+      });
+    });
+    chain.then(function () {
+      hideProgress();
+      $('b-txt').disabled = false;
+      upState = null;
+      clearAttach();
+      $('t-send').value = '';
+      $('t-send').style.height = '28px';
+      toast('✅ 已发送', 'ok');
+      if (imgs.length) loadChat();
+    }).catch(function (err) {
+      var canceled = !!(upState && upState.cancel);
+      hideProgress();
+      $('b-txt').disabled = false;
+      upState = null;
+      toast(canceled ? '已取消' : ('❌ ' + (err && err.message || err)), canceled ? '' : 'err');
+    });
+  }
+  function sendText(text) {
+    var save = !!($('c-save') && $('c-save').checked);
+    var notify = !!($('c-notify') && $('c-notify').checked);
+    $('b-txt').disabled = true;
+    api('/text', { text: text, save: save, notify: notify }).then(function (r) {
+      if (r.ok) {
+        $('t-send').value = '';
+        $('t-send').style.height = '28px';
+        toast('已发送', 'ok');
+        return loadChat();
       }
-    }).catch(function () {});
+      toast(r.error || '发送失败', 'err');
+    }).catch(function (e) { toast(String(e), 'err'); })
+      .then(function () { $('b-txt').disabled = false; });
   }
-
-  var liveSeq = 0;
-  function loadLive() {
-    return fetch('/live?after=0').then(function (r) { return r.json(); }).then(function (r) {
-      if (!r || !r.ok || !Array.isArray(r.items) || !r.items.length) return;
-      var last = r.items[r.items.length - 1];
-      if (!last || !last.text || last.seq === liveSeq) return;
-      var box = $('l-live');
-      if (!box) return;
-      liveSeq = last.seq;
-      box.textContent = '';
-      var d = document.createElement('div');
-      d.className = 'live';
-      var h = document.createElement('div');
-      h.className = 'lt';
-      h.textContent = '助手 · ' + new Date(last.at || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
-      var b = document.createElement('div');
-      b.textContent = last.text;
-      d.appendChild(h);
-      d.appendChild(b);
-      box.appendChild(d);
-    }).catch(function () {});
-  }
-  loadLive();
-  setInterval(loadLive, 2000);
-
-  $('b-img').onclick = function () { $('f-img').click(); };
-  var pendingImg = null;
-  function clearPendingImg() {
-    pendingImg = null;
-    var pv = $('img-prev'); if (pv) { pv.style.display = 'none'; pv.textContent = ''; }
-    var inp = $('f-img'); if (inp) inp.value = '';
-  }
-  $('f-img').onchange = function () {
-    var f = ($('f-img').files || [])[0];
-    if (!f) return;
-    pendingImg = f;
-    var pv = $('img-prev');
-    pv.style.display = 'block';
-    pv.textContent = '';
-    var im = document.createElement('img');
-    im.className = 'pending-thumb';
-    im.src = URL.createObjectURL(f);
-    var sp = document.createElement('span');
-    sp.textContent = f.name + ' · ' + fmt(f.size);
-    var x = document.createElement('button');
-    x.textContent = '✕';
-    x.onclick = clearPendingImg;
-    pv.appendChild(im); pv.appendChild(sp); pv.appendChild(x);
+  $('b-txt').onclick = function () {
+    closeTools();
+    sendAll();
   };
-  function sendPendingImage(caption) {
-    var f = pendingImg;
-    if (!f) return;
-    set('s-txt', '上传图片…');
-    var useCompress = !!($('c-compress') && $('c-compress').checked);
-    (useCompress ? compressImage(f) : Promise.resolve(f)).then(function (u) {
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload?to=chat');
-      xhr.setRequestHeader('X-Filename', encodeURIComponent(u.name));
-      xhr.setRequestHeader('X-Caption', encodeURIComponent(caption || ''));
-      xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) set('s-txt', '图片 ' + Math.round(ev.loaded / ev.total * 100) + '%'); };
-      xhr.onload = function () {
-        var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
-        if (xhr.status === 200 && r && r.ok) {
-          clearPendingImg();
-          $('t-send').value = '';
-          set('s-txt', '已发送', 'ok');
-          toast('📷 图片已发送', 'ok');
-          loadChat();
-        } else set('s-txt', '图片失败：' + ((r && r.error) || xhr.status), 'err');
-      };
-      xhr.onerror = function () { set('s-txt', '网络中断', 'err'); };
-      xhr.send(u);
-    }).catch(function () { set('s-txt', '处理失败', 'err'); });
+  $('t-send').addEventListener('input', function () {
+    this.style.height = '28px';
+    this.style.height = Math.min(120, this.scrollHeight) + 'px';
+  });
+  $('t-send').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAll(); }
+  });
+
+  // ---------- 工具面板 ----------
+  function openTools() {
+    if (!$('tools-sheet').hidden) return;
+    $('tools-backdrop').hidden = false;
+    $('tools-sheet').hidden = false;
+    try { history.pushState({ toolsSheet: 1 }, '', location.href); } catch (e) {}
   }
+  function closeTools(fromHistory) {
+    var wasOpen = !$('tools-sheet').hidden;
+    $('tools-sheet').hidden = true;
+    $('tools-backdrop').hidden = true;
+    if (wasOpen && !fromHistory && history.state && history.state.toolsSheet) {
+      try { history.back(); } catch (e) {}
+    }
+  }
+  $('b-tools').onclick = function () {
+    if ($('tools-sheet').hidden) openTools();
+    else closeTools();
+  };
+  $('tools-backdrop').onclick = function () { closeTools(); };
+  window.addEventListener('popstate', function () {
+    if (!$('tools-sheet').hidden) closeTools(true);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!$('tools-sheet').hidden) closeTools();
+    else if (!$('share-drawer').hidden) closeDrawer();
+  });
+  $('tool-image').onclick = function () { closeTools(); $('f-img').click(); };
+  $('tool-file').onclick = function () { closeTools(); $('f-up').click(); };
+  $('tool-share').onclick = function () { closeTools(); openDrawer('files'); };
+  $('tool-shot').onclick = function () { doShot(); };
+  $('f-img').onchange = function () { addFiles(this.files); };
+  $('f-up').onchange = function () { addFiles(this.files); };
   $('b-clear').onclick = function () {
     if (!confirm('清空手机与电脑之间的全部对话？')) return;
     fetch('/inbox/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-      .then(function () { chat = []; renderChat(); toast('对话已清空', 'ok'); });
-  };
-  $('b-txt').onclick = function () {
-    if (pendingImg) { sendPendingImage($('t-send').value); return; }
-    var text = $('t-send').value;
-    if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }
-    var save = !!($('c-save') && $('c-save').checked);
-    var notify = !!($('c-notify') && $('c-notify').checked);
-    var b = $('b-txt'); b.disabled = true;
-    api('/text', { text: text, save: save, notify: notify }).then(function (r) {
-      if (r.ok) {
-        set('s-txt', r.saved ? ('已保存：' + r.name + '（' + fmt(r.bytes) + '）') : '已发送（未生成文件）', 'ok');
-        $('t-send').value = '';
-        if (r.saved) loadTexts();
-        return loadChat();
-      }
-      set('s-txt', r.error || '发送失败', 'err');
-    }).catch(function (e) { set('s-txt', String(e), 'err'); })
-      .then(function () { b.disabled = false; });
+      .then(function () { chat = []; seen = {}; $('l-chat').textContent = ''; renderEmpty(); toast('对话已清空', 'ok'); });
   };
 
-  // ---- 文件浏览 ----
-  var currentDir = '';
-  var rootsCache = [];
+  // ---------- 截屏 ----------
+  function doShot() {
+    closeTools();
+    toast('正在截屏…');
+    api('/shot', {}).then(function (r) {
+      if (!r.ok) { toast(r.error || '截屏失败', 'err'); return; }
+      $('img-shot').src = '/shot.png' + qs('t=' + Date.now());
+      $('shot-modal').hidden = false;
+    }).catch(function (e) { toast(String(e), 'err'); });
+  }
+  $('shot-close').onclick = function () { $('shot-modal').hidden = true; };
+
+  // ---------- 共享抽屉 ----------
+  var currentDir = '', rootsCache = [], drawerTab = 'files';
+  function openDrawer(tab) {
+    $('drawer-backdrop').hidden = false;
+    $('share-drawer').hidden = false;
+    switchDrawer(tab || 'files');
+    if ((tab || 'files') === 'files') { loadRoots(); loadFiles(''); }
+    else loadTexts();
+  }
+  function closeDrawer() {
+    $('drawer-backdrop').hidden = true;
+    $('share-drawer').hidden = true;
+  }
+  function switchDrawer(tab) {
+    drawerTab = tab;
+    $('tab-files').className = 'tab' + (tab === 'files' ? ' on' : '');
+    $('tab-texts').className = 'tab' + (tab === 'texts' ? ' on' : '');
+    $('pane-files').hidden = tab !== 'files';
+    $('pane-texts').hidden = tab !== 'texts';
+    if (tab === 'texts') loadTexts();
+  }
+  $('drawer-close').onclick = closeDrawer;
+  $('drawer-backdrop').onclick = closeDrawer;
+  $('tab-files').onclick = function () { switchDrawer('files'); };
+  $('tab-texts').onclick = function () { switchDrawer('texts'); };
 
   function prettyPath(p) {
     if (!p) return '共享文件夹';
     if (p === '__upload__') return '上传文件夹';
     var m = /^__x__\\/(\\d+)(?:\\/(.*))?$/.exec(p);
     if (m) {
-      var r = rootsCache[Number(m[1])];
-      var label = r ? r.name : '额外目录';
+      var r = rootsCache[Number(m[1])]; var label = r ? r.name : '额外目录';
       return label + (m[2] ? ' / ' + m[2].split('/').join(' / ') : '');
     }
     return p;
   }
-
   function loadRoots() {
     return fetch('/roots' + qs()).then(function (r) { return r.json(); }).then(function (r) {
       if (!r || !r.ok) return;
       rootsCache = r.roots || [];
-      var box = $('b-roots');
-      if (!box) return;
+      var box = $('b-roots'); if (!box) return;
       box.textContent = '';
       rootsCache.forEach(function (root) {
         var b = document.createElement('button');
-        b.textContent = (root.kind === 'extra' ? '📂 ' : '') + root.name;
-        if (root.kind === 'share') b.className = 'primary';
+        b.type = 'button'; b.className = 'mini'; b.textContent = (root.kind === 'extra' ? '📂 ' : '') + root.name;
         b.onclick = function () { loadFiles(root.v); };
         box.appendChild(b);
       });
     }).catch(function () {});
   }
+  function downloadFile(p, name) {
+    toast('⬇ 正在准备下载：' + name);
+    fetch('/download-ticket' + qs('p=' + encodeURIComponent(p))).then(function (r) {
+      return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+    }).then(function (d) {
+      if (!d || !d.ok || !d.url) throw new Error((d && d.error) || '无法生成下载地址');
+      var a = document.createElement('a');
+      a.href = d.url;
+      a.download = d.name || name || 'download';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast('⬇ 已交给浏览器下载：' + (d.name || name), 'ok');
+    }).catch(function (e) { toast('❌ ' + (e && e.message || e), 'err'); });
+  }
   function rowFor(it, base) {
+    var p = (base ? base + '/' : '') + it.n;
     var a = document.createElement('a');
     a.className = 'item';
-    a.href = it.dir
-      ? '/files' + qs('p=' + encodeURIComponent((base ? base + '/' : '') + it.n))
-      : '/download' + qs('p=' + encodeURIComponent((base ? base + '/' : '') + it.n));
-    if (it.dir) a.setAttribute('data-dir', '1');
-    var nm = document.createElement('span');
-    nm.className = 'nm';
+    a.href = it.dir ? '/files' + qs('p=' + encodeURIComponent(p))
+      : '/download' + qs('p=' + encodeURIComponent(p));
+    var nm = document.createElement('span'); nm.className = 'nm';
     nm.textContent = (it.dir ? '📁 ' : '📄 ') + it.n;
-    var meta = document.createElement('span');
-    meta.className = 'meta';
+    var meta = document.createElement('span'); meta.className = 'meta';
     meta.textContent = it.dir ? '' : fmt(it.sz) + ' · ' + it.t;
     a.appendChild(nm); a.appendChild(meta);
-    // 下载由浏览器接管，这里给一个"开始下载"的反馈
     if (!it.dir) {
-      a.addEventListener('click', function () { toast('⬇ 开始下载：' + it.n); });
+      a.addEventListener('click', function (ev) { ev.preventDefault(); downloadFile(p, it.n); });
     }
     return a;
   }
   function loadFiles(dir) {
-    var list = $('l-files');
+    var list = $('l-files'); if (!list) return;
     list.textContent = '';
-    fetch('/files' + qs('p=' + encodeURIComponent(dir || '')))
-      .then(function (r) { return r.json(); })
-      .then(function (r) {
-        if (!r.ok) { set('d-path', r.error || '无法读取目录', 'err'); return; }
-        currentDir = r.p || '';
-        $('d-path').textContent = prettyPath(currentDir);
-        if (r.parent !== undefined && r.parent !== null && r.parent !== '') {
-          var up = document.createElement('a');
-          up.className = 'item'; up.href = '/files' + qs('p=' + encodeURIComponent(r.parent));
-          var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '⬆ 上级目录';
-          up.appendChild(nm); list.appendChild(up);
+    fetch('/files' + qs('p=' + encodeURIComponent(dir || ''))).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r.ok) { $('d-path').textContent = r.error || '无法读取目录'; toast(r.error || '无法读取目录', 'err'); return; }
+      currentDir = r.p || '';
+      $('d-path').textContent = prettyPath(currentDir);
+      if (r.parent !== undefined && r.parent !== null && r.parent !== '') {
+        var up = document.createElement('a'); up.className = 'item'; up.href = '#';
+        var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '⬆ 上级目录';
+        up.appendChild(nm);
+        up.addEventListener('click', function (ev) { ev.preventDefault(); loadFiles(r.parent); });
+        list.appendChild(up);
+      }
+      (r.items || []).forEach(function (it) {
+        var a = rowFor(it, currentDir);
+        if (it.dir) {
+          a.addEventListener('click', function (ev) {
+            ev.preventDefault(); loadFiles((currentDir ? currentDir + '/' : '') + it.n);
+          });
         }
-        (r.items || []).forEach(function (it) {
-          var a = rowFor(it);
-          if (it.dir) {
-            a.addEventListener('click', function (ev) {
-              ev.preventDefault();
-              loadFiles((currentDir ? currentDir + '/' : '') + it.n);
-            });
-          }
-          list.appendChild(a);
-        });
-        if (!(r.items || []).length) {
-          var d = document.createElement('div'); d.className = 'muted'; d.textContent = '这个文件夹是空的';
-          list.appendChild(d);
-        }
-        $('d-path').dataset.dir = currentDir;
-      })
-      .catch(function () { set('d-path', '网络错误', 'err'); });
+        list.appendChild(a);
+      });
+      if (!(r.items || []).length) {
+        var d = document.createElement('div'); d.className = 'muted'; d.textContent = '这个文件夹是空的'; list.appendChild(d);
+      }
+    }).catch(function () { $('d-path').textContent = '网络错误'; toast('网络错误', 'err'); });
   }
-
-  // ---- 电脑上的文字 ----
   function loadTexts() {
-    var list = $('l-texts'); list.textContent = '';
+    var list = $('l-texts'); if (!list) return;
+    list.textContent = '';
     fetch('/texts' + qs()).then(function (r) { return r.json(); }).then(function (r) {
       if (!r.ok) return;
-      (r.items || []).forEach(function (it, idx) {
-        var a = document.createElement('a');
-        a.className = 'item'; a.href = '#';
+      (r.items || []).forEach(function (it) {
+        var a = document.createElement('a'); a.className = 'item'; a.href = '#';
         var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '📄 ' + it.n;
-        var meta = document.createElement('span'); meta.className = 'meta';
-        meta.textContent = (it.mb || 0) + ' KB · ' + it.t;
+        var meta = document.createElement('span'); meta.className = 'meta'; meta.textContent = (it.mb || 0) + ' KB · ' + it.t;
         a.appendChild(nm); a.appendChild(meta);
         a.onclick = function (ev) {
           ev.preventDefault();
           fetch('/text' + qs('p=' + encodeURIComponent((r.parent ? r.parent + '/' : '') + it.n)))
             .then(function (x) { return x.text(); })
-            .then(function (txt) {
-              showText(txt, it.n);
-            });
+            .then(function (txt) { showText(txt, it.n); });
         };
         list.appendChild(a);
       });
       if (!(r.items || []).length) {
-        var d = document.createElement('div'); d.className = 'muted'; d.textContent = '共享文件夹里还没有 txt';
-        list.appendChild(d);
+        var d = document.createElement('div'); d.className = 'muted'; d.textContent = '共享文件夹里还没有 txt'; list.appendChild(d);
       }
     }).catch(function () {});
   }
-
   function showText(txt, label) {
-    var pre = $('p-text');
-    pre.textContent = txt;
-    pre.style.display = 'block';
-    $('p-actions').style.display = 'flex';
-    $('hint-text').style.display = 'block';
-    set('s-text', label || '', '');
+    $('p-text').textContent = txt;
+    $('p-text').hidden = false;
+    $('p-actions').hidden = false;
+    $('hint-text').hidden = false;
+    $('s-text').textContent = label || '';
   }
-
-  function currentText() {
-    var pre = $('p-text');
-    return pre && pre.style.display !== 'none' ? (pre.textContent || '') : '';
-  }
-
-  function copyText(text, onOk, onFail) {
-    if (!text) { if (onFail) onFail(); return; }
-    function fallback() {
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.setAttribute('readonly', '');
-      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;height:1px;width:1px';
-      document.body.appendChild(ta);
-      ta.select();
-      try { ta.setSelectionRange(0, ta.value.length); } catch (e) {}
-      var ok = false;
-      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
-      document.body.removeChild(ta);
-      if (ok) { if (onOk) onOk(); } else if (onFail) onFail();
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () { if (onOk) onOk(); }, fallback);
-    } else fallback();
-  }
-
-  function copyFullText(txt) {
-    if (!txt) { set('s-text', '先点上面一个文件', 'err'); return; }
-    copyText(txt,
-      function () { set('s-text', '已复制全文', 'ok'); },
-      function () { set('s-text', '复制失败，请长按手动复制', 'err'); });
-  }
-
+  function currentText() { return $('p-text').hidden ? '' : ($('p-text').textContent || ''); }
   $('b-copy').onclick = function (ev) {
     ev.preventDefault();
-    copyFullText(currentText());
+    var txt = currentText();
+    if (!txt) { $('s-text').textContent = '先点上面一个文件'; return; }
+    copyText(txt, function () { $('s-text').textContent = '已复制全文'; }, function () { $('s-text').textContent = '复制失败，请长按'; });
   };
   $('b-selall').onclick = function (ev) {
     ev.preventDefault();
-    var pre = $('p-text');
-    if (!pre || pre.style.display === 'none') { set('s-text', '先点上面一个文件', 'err'); return; }
+    var pre = $('p-text'); if (pre.hidden) return;
     try {
-      var range = document.createRange();
-      range.selectNodeContents(pre);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      set('s-text', '已全选，可用系统菜单或上面的按钮复制', '');
-    } catch (e) {
-      set('s-text', '全选失败，请长按选择', 'err');
-    }
+      var range = document.createRange(); range.selectNodeContents(pre);
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      $('s-text').textContent = '已全选';
+    } catch (e) { $('s-text').textContent = '全选失败'; }
   };
-  // 单击正文 = 复制全文；已经有选区时不抢（交给系统选择菜单）
   $('p-text').addEventListener('click', function () {
-    var sel = '';
-    try { sel = String(window.getSelection() || ''); } catch (e) { sel = ''; }
+    var sel = ''; try { sel = String(window.getSelection() || ''); } catch (e) {}
     if (sel.trim().length) return;
-    copyFullText(currentText());
+    var txt = currentText(); if (!txt) return;
+    copyText(txt, function () { toast('已复制全文', 'ok'); }, function () { toast('复制失败', 'err'); });
   });
 
-  loadRoots();
-  loadFiles('');
-  loadTexts();
+  // ---------- 启动 ----------
+  renderEmpty();
   loadChat();
-  setInterval(function () { loadChat(); }, 4000);
-  setInterval(function () { loadRoots(); }, 20000);
+  setInterval(loadChat, 4000);
+  loadLive();
+  setInterval(loadLive, 2000);
+  setInterval(function () { if (!$('share-drawer').hidden && drawerTab === 'files') loadRoots(); }, 20000);
 })();
 </script>
 <script>
-// PWA：只在安全上下文（https / localhost）注册；手机用 http://局域网IP 打开时
-// 浏览器会拒绝注册，这行会静默失败，页面功能不受影响。
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function () {
     navigator.serviceWorker.register('/sw.js').catch(function () { /* 非安全上下文，忽略 */ });

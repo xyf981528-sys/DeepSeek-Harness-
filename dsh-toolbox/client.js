@@ -221,6 +221,14 @@ window.__ModuleLoader__.load({
         } catch (e) { setErr(String(e.message || e)) }
       }
 
+      function openDetail() {
+        try {
+          const layout = ctx && ctx.get ? ctx.get('layout') : null
+          if (layout && layout.selectPanel) layout.selectPanel('file-station')
+          else setErr('找不到布局服务，无法打开详情页')
+        } catch (e) { setErr(String(e.message || e)) }
+      }
+
       const restartOn = !!(restart && restart.ok)
       const filesOn = !!(files && files.running)
       const mcpOn = !!(mcp && mcp.running)
@@ -272,6 +280,7 @@ window.__ModuleLoader__.load({
             h('div', { style: S.row },
               h(Btn, { onClick: revealConn }, '显示连接地址'),
               reveal ? h(Btn, { onClick: hideConn }, '隐藏') : null,
+              h(Btn, { onClick: openDetail, kind: 'primary' }, '展开详情'),
               h(Btn, { onClick: refreshFiles }, '刷新状态'),
             ),
           ),
