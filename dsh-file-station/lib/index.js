@@ -400,10 +400,22 @@ export function apply(ctx, config = {}) {
           if (!text.trim()) return;
           entry.text = text.slice(0, 2000);
         } else if (type === 'tool/call') {
-          entry.text = String(event.data && event.data.name || '工具') + ' ' + String(event.data && event.data.arguments || '').slice(0, 300);
+          let brief = '';
+          try {
+            const raw = event.data && event.data.arguments;
+            const arg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (arg && typeof arg === 'object') {
+              brief = arg.file_path || arg.command || arg.path || arg.url || arg.query || arg.target || '';
+            }
+          } catch { /* ignore */ }
+          entry.text = String(event.data && event.data.name || '工具') + (brief ? ' · ' + String(brief).slice(0, 160) : '');
         } else if (type === 'tool/result') {
           const m = event.data && event.data.message;
-          entry.text = String(m && m.content ? JSON.stringify(m.content).slice(0, 300) : '工具返回');
+          const blocks = m && Array.isArray(m.content) ? m.content : [];
+          const textPart = blocks.filter((b) => b && b.type === 'text').map((b) => b.text || '').join(' ').trim();
+          const hasImage = blocks.some((b) => b && b.type === 'image');
+          entry.text = (textPart ? textPart.slice(0, 400) : '') +
+            (hasImage ? (textPart ? '\n' : '') + '🖼 图片结果' : '') || '工具返回';
         } else if (type === 'turn/end') {
           entry.text = '本轮结束';
         } else {
