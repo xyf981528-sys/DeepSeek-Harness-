@@ -8,3 +8,4 @@
         trustLoopback: true
         pairDialog: false
         tunnel: false
+        doneNotifyMinSeconds: 180

@@ -381,10 +381,18 @@ export function apply(ctx, config = {}) {
   station.liveEntries = liveEntries;
   ctx.effect(() => {
     let seq = 0;
+    const turnStarts = new Map();
+    const minSeconds = Number(config.doneNotifyMinSeconds) >= 0 ? Number(config.doneNotifyMinSeconds) : 180;
     const off = ctx.on('session/event', (subject, event) => {
       try {
         if (!event || !event.type) return;
         const type = event.type;
+        const subjectId = (subject && (subject.id || (subject.session && subject.session.id))) || 'default';
+        if (type === 'turn/start') {
+          turnStarts.set(subjectId, Date.now());
+          return;
+        }
+        if (!turnStarts.has(subjectId)) turnStarts.set(subjectId, Date.now());
         const entry = { seq: ++seq, type, at: Date.now() };
         if (type === 'assistant/message') {
           const msg = event.data && event.data.message;
@@ -404,13 +412,15 @@ export function apply(ctx, config = {}) {
         liveEntries.push(entry);
         if (liveEntries.length > 200) liveEntries.splice(0, liveEntries.length - 200);
         if (type === 'turn/end') {
+          const started = turnStarts.get(subjectId) || 0;
+          turnStarts.delete(subjectId);
+          const seconds = started ? Math.round((Date.now() - started) / 1000) : 0;
           const sid = liveAgent && liveAgent.session && liveAgent.session.id;
-          const subjectId = subject && (subject.id || (subject.session && subject.session.id));
-          if (!sid || !subjectId || sid === subjectId) {
-            try {
-              const at = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-              station.inboxAppend('✅ 任务已完成（' + at + '）', false, { from: 'pc', kind: 'msg' });
-            } catch { /* ignore */ }
+          if ((!sid || sid === subjectId) && started && seconds >= minSeconds) {
+            const mm = Math.floor(seconds / 60);
+            const ss = seconds % 60;
+            const used = mm ? (mm + ' 分 ' + ss + ' 秒') : (ss + ' 秒');
+            station.inboxAppend('✅ 任务已完成（用时 ' + used + '）', false, { from: 'pc', kind: 'msg' });
           }
         }
       } catch { /* ignore */ }
