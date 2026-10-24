@@ -154,6 +154,23 @@ python scripts/make-cert.py
 
 升级后第一次连接需要点一次「允许」，这是预期行为。
 
+## Android APK（v1.0）
+
+`android/` 是 WebView 壳源码，产物 `android/dist/filestation.apk`（约 37 KB，minSdk 24 / target 34）。
+
+- **安装**：下载 APK → 允许「未知来源」→ 安装。装好后桌面出现「文件传输台」图标。
+- **首次打开**：填连接地址——面板「显示连接地址」里的完整 URL；局域网用 `http://电脑IP:19790/?k=访问码`，不要用 19791（HTTPS 需要证书）。
+- **功能**：文件选择上传（多选）、下载到系统「下载」目录、Cookie/登录态、返回键、菜单「设置地址 / 重新加载」。
+- **不用证书**：壳里允许明文 HTTP（`usesCleartextTraffic`），所以 19790 直接可用，不会再出现红盾。
+- **构建**：
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File android\build.ps1
+  ```
+
+  依赖 `D:\DeepSeek Y\tools\android\` 下的 JDK 17、build-tools 34、platform 34（已下载解压）；产物输出到 `android\dist\`。
+- 安装包也放了一份在 `data\共享\文件传输台.apk`，手机打开传输台 →「电脑上的文件」→ 共享文件夹即可下载。
+
 ## 数据位置
 
 默认是**插件目录下的 `data`**，即 `D:\DeepSeek Y\dsh-file-station\data`（跟随插件所在盘，不再写 C 盘）。

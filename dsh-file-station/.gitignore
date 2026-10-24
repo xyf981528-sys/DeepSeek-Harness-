@@ -2,5 +2,10 @@ node_modules/
 data/
 _backup/
 certs/
+android/build/
+android/dist/
+android/debug.keystore
+*.apk
+*.idsig
 *.bak-*
 *.log
