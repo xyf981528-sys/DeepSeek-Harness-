@@ -355,6 +355,7 @@ export function apply(ctx, config = {}) {
       const body = String(entry.text || '').slice(0, max);
       const text = entry.image
         ? '【手机文件传输台】手机发来一张图片（' + entry.t + '）：\n' +
+          (entry.text && entry.text !== '📷 图片' ? entry.text + '\n' : '') +
           path.join(station.dataDir, entry.image.path) +
           '\n（可用 read_image 查看）'
         : '【手机文件传输台】手机端来了一条消息（' + entry.t + '）：\n' + body;
@@ -1303,12 +1304,13 @@ class FileStation {
   }
 
   /** 对话图片落盘后写一条 image 消息并唤醒 Agent。 */
-  chatImageSaved(filePath, size) {
+  chatImageSaved(filePath, size, caption) {
     const rel = path.relative(this.dataDir, filePath).split(path.sep).join('/');
     const name = path.basename(filePath);
     const ext = path.extname(name).toLowerCase();
     const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
-    const entry = this.inboxAppend('📷 图片', false, {
+    const text = caption && caption.trim() ? caption.trim().slice(0, 2000) : '📷 图片';
+    const entry = this.inboxAppend(text, false, {
       from: 'phone',
       kind: 'image',
       image: { path: rel, name, size, mime },
@@ -1606,6 +1608,10 @@ class FileStation {
       }
       if (req.method === 'GET' && route === '/state') {
         return this.safeJson(res, 200, { ok: true, queue: this.queueTail(50) });
+      }
+      if (req.method === 'POST' && route === '/inbox/clear') {
+        try { fs.writeFileSync(this.inboxFile, '', 'utf8'); } catch { /* ignore */ }
+        return this.safeJson(res, 200, { ok: true });
       }
       if (req.method === 'GET' && route === '/raw') return this.serveChatImage(req, res, url);
       if (req.method === 'GET' && route === '/live') {
@@ -1997,7 +2003,9 @@ class FileStation {
     if (rawName === undefined) return this.safeJson(res, 400, { ok: false, error: '缺少文件名' });
     try { rawName = decodeURIComponent(String(rawName)); } catch { /* 保留原样 */ }
     const name = this.safeName(rawName);
-    // 目标目录：默认「上传」（手机传电脑），?to=share 时改为「共享」（电脑拖进来，手机可下载）
+    let caption = '';
+    try { caption = decodeURIComponent(String(req.headers['x-caption'] || '')); } catch { /* ignore */ }
+    caption = caption.slice(0, 2000);
     let toShare = !!forceShare;
     let toChat = false;
     if (!toShare) {
@@ -2067,7 +2075,7 @@ class FileStation {
     // 面板靠轮询 status 知道"传完了"，所以把最近一次上传记在状态里
     this.lastUpload = { name: path.basename(finalPath), size, t: this.stamp(), at: Date.now(), to: toShare ? 'share' : toChat ? 'chat' : 'upload' };
     if (toChat) {
-      const entry = this.chatImageSaved(finalPath, size);
+      const entry = this.chatImageSaved(finalPath, size, caption);
       return this.safeJson(res, 200, { ok: true, chat: true, name: path.basename(finalPath), size, t: entry && entry.t });
     }
     return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size });

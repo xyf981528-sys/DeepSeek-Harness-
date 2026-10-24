@@ -78,6 +78,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
         font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:0 0 6px;max-height:160px;overflow:auto}
   .live .lt{color:#7f8b9c;font-size:11px;margin-bottom:2px}
   .chat-img{max-width:100%;max-height:260px;border-radius:10px;display:block;margin-top:4px}
+  .img-prev{display:flex;gap:8px;align-items:center;margin-top:8px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+  .pending-thumb{width:44px;height:44px;object-fit:cover;border-radius:8px}
+  .img-prev button{min-height:30px;padding:2px 10px}
   .item{display:flex;gap:9px;align-items:center;padding:9px 8px;border-radius:11px;overflow:hidden;
         text-decoration:none;color:inherit;transition:background .12s}
   .item:active{background:#1b2430}
@@ -152,7 +155,8 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
     <div class="row" style="margin-top:8px"><button id="b-img">📷 发图片</button><span class="muted" id="s-img"></span></div>
     <input type="file" id="f-img" accept="image/*" style="display:none">
-    <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
+    <div id="img-prev" class="img-prev" style="display:none"></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><button id="b-clear">清空对话</button><span class="muted" id="s-txt"></span></div>
   </div>
 
   <div class="card">
@@ -470,6 +474,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
         im.src = '/raw?path=' + encodeURIComponent(it.image.path) + '&t=' + Date.now();
         im.addEventListener('click', function () { try { window.open(im.src, '_blank'); } catch (e) {} });
         body.appendChild(im);
+        if (it.text && it.text !== '📷 图片') {
+          var cap = document.createElement('div');
+          cap.textContent = it.text;
+          cap.style.marginTop = '4px';
+          body.appendChild(cap);
+        }
       } else {
         body.textContent = it.text || '';
         body.addEventListener('click', function () {
@@ -535,35 +545,61 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   setInterval(loadLive, 2000);
 
   $('b-img').onclick = function () { $('f-img').click(); };
+  var pendingImg = null;
+  function clearPendingImg() {
+    pendingImg = null;
+    var pv = $('img-prev'); if (pv) { pv.style.display = 'none'; pv.textContent = ''; }
+    var inp = $('f-img'); if (inp) inp.value = '';
+  }
   $('f-img').onchange = function () {
     var f = ($('f-img').files || [])[0];
     if (!f) return;
-    set('s-img', '处理图片…');
+    pendingImg = f;
+    var pv = $('img-prev');
+    pv.style.display = 'block';
+    pv.textContent = '';
+    var im = document.createElement('img');
+    im.className = 'pending-thumb';
+    im.src = URL.createObjectURL(f);
+    var sp = document.createElement('span');
+    sp.textContent = f.name + ' · ' + fmt(f.size);
+    var x = document.createElement('button');
+    x.textContent = '✕';
+    x.onclick = clearPendingImg;
+    pv.appendChild(im); pv.appendChild(sp); pv.appendChild(x);
+  };
+  function sendPendingImage(caption) {
+    var f = pendingImg;
+    if (!f) return;
+    set('s-txt', '上传图片…');
     var useCompress = !!($('c-compress') && $('c-compress').checked);
     (useCompress ? compressImage(f) : Promise.resolve(f)).then(function (u) {
-      set('s-img', '上传中…');
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload?to=chat');
       xhr.setRequestHeader('X-Filename', encodeURIComponent(u.name));
-      xhr.upload.onprogress = function (ev) {
-        if (ev.lengthComputable) set('s-img', '上传中 ' + Math.round(ev.loaded / ev.total * 100) + '%');
-      };
+      xhr.setRequestHeader('X-Caption', encodeURIComponent(caption || ''));
+      xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) set('s-txt', '图片 ' + Math.round(ev.loaded / ev.total * 100) + '%'); };
       xhr.onload = function () {
         var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
         if (xhr.status === 200 && r && r.ok) {
-          set('s-img', '已发送 ' + fmt(r.size || 0));
+          clearPendingImg();
+          $('t-send').value = '';
+          set('s-txt', '已发送', 'ok');
           toast('📷 图片已发送', 'ok');
-          $('f-img').value = '';
           loadChat();
-        } else {
-          set('s-img', '失败：' + ((r && r.error) || xhr.status), 'err');
-        }
+        } else set('s-txt', '图片失败：' + ((r && r.error) || xhr.status), 'err');
       };
-      xhr.onerror = function () { set('s-img', '网络中断', 'err'); };
+      xhr.onerror = function () { set('s-txt', '网络中断', 'err'); };
       xhr.send(u);
-    }).catch(function () { set('s-img', '处理失败', 'err'); });
+    }).catch(function () { set('s-txt', '处理失败', 'err'); });
+  }
+  $('b-clear').onclick = function () {
+    if (!confirm('清空手机与电脑之间的全部对话？')) return;
+    fetch('/inbox/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then(function () { chat = []; renderChat(); toast('对话已清空', 'ok'); });
   };
   $('b-txt').onclick = function () {
+    if (pendingImg) { sendPendingImage($('t-send').value); return; }
     var text = $('t-send').value;
     if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }
     var save = !!($('c-save') && $('c-save').checked);
