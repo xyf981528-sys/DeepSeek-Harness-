@@ -41,6 +41,7 @@ window.__ModuleLoader__.load({
         shotDone: '已截屏，可在下方预览',
         shotFail: '截屏失败',
         resetToken: '重置访问码',
+        pairDevices: '设备配对',
         resetWarn: '重置后旧地址立即失效，手机上需要重新打开新地址。',
         resetDone: '访问码已重置，请用新地址重新打开手机端',
         recentUploads: '最近收到的文件',
@@ -118,6 +119,7 @@ window.__ModuleLoader__.load({
         shotDone: 'Screenshot captured',
         shotFail: 'Screenshot failed',
         resetToken: 'Reset access code',
+        pairDevices: 'Pair devices',
         resetWarn: 'The old address stops working immediately.',
         resetDone: 'Access code reset — reopen the new address on the phone',
         recentUploads: 'Recently received files',
@@ -682,7 +684,12 @@ window.__ModuleLoader__.load({
             h('span', { className: 'fs-badge' },
               h('span', { className: 'fs-dot' + (running ? ' on' : '') }),
               t(running ? 'running' : 'stopped'),
-              h('span', { style: { opacity: 0.7 } }, '· ' + t('port') + ' ' + status.port))),
+              h('span', { style: { opacity: 0.7 } }, '· ' + t('port') + ' ' + status.port)),
+            h(Btn, {
+              onClick: () => {
+                try { window.open(status.adminUrl, '_blank', 'noopener'); } catch (e) { /* ignore */ }
+              },
+            }, t('pairDevices') + (status.pendingDevices ? '（' + status.pendingDevices + '）' : ''))),
 
           // 访问地址 + 扫码
           h('div', { className: 'fs-card' },

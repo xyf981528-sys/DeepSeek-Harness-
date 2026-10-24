@@ -191,6 +191,57 @@ $form.Add_Shown({ $form.Activate(); $form.BringToFront() })
 [void]$form.ShowDialog()
 `.trim();
 
+/** 电脑端本机管理页：批准/拒绝/撤销设备（仅 loopback 可访问）。 */
+const ADMIN_PAGE = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0a0e13"><meta name="robots" content="noindex,nofollow">
+<title>文件传输台 · 设备配对</title>
+<style>
+  body{margin:0;background:radial-gradient(800px 420px at 50% 0%,#17253c 0%,#0a0e13 70%);color:#e9eef6;
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px}
+  .wrap{max-width:720px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:#8c99ab;margin:0 0 20px}
+  section{background:rgba(20,26,34,.72);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px;margin:0 0 14px;
+          backdrop-filter:blur(18px) saturate(1.3)}
+  h2{font-size:14px;margin:0 0 10px;color:#c7d2e2}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .row:first-of-type{border-top:0}
+  .name{font-weight:600}
+  .muted{color:#7f8b9c;font-size:12px;display:block;word-break:break-all}
+  button{font:inherit;min-height:34px;border-radius:10px;padding:6px 14px;cursor:pointer;border:1px solid #2a3646;background:#1d2632;color:#e9eef6}
+  button.ok{background:linear-gradient(180deg,#4f9f6f,#2f7a4e);border-color:#4f9f6f;color:#06140c;font-weight:650}
+  button.no{background:#2a2226;border-color:#5a3a3f;color:#ffb4ae}
+  button:active{transform:scale(.97)}
+  .acts{display:flex;gap:8px;flex-shrink:0}
+  .empty{color:#7f8b9c;margin:6px 0}
+  .hint{color:#7f8b9c;font-size:12px;margin-top:14px}
+</style></head><body><div class="wrap">
+<h1>文件传输台 · 设备配对</h1>
+<p class="sub">这个页面只在本机（127.0.0.1）可打开。手机上显示「等待电脑确认」时，在这里点「允许」。</p>
+<section><h2>待确认</h2>__PENDING__</section>
+<section><h2>已授权</h2>__APPROVED__</section>
+<section><h2>已拒绝</h2>__BLOCKED__</section>
+<div class="acts"><button id="refresh">刷新</button></div>
+<p class="hint">设备记录保存在 data/_devices.json；撤销后手机会回到等待确认状态。</p>
+</div>
+<script>
+(function () {
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-action]');
+    if (!b) return;
+    b.disabled = true;
+    fetch('/pair-admin/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: b.getAttribute('data-id'), action: b.getAttribute('data-action') })
+    }).then(function () { location.reload(); }).catch(function () { b.disabled = false; });
+  });
+  document.getElementById('refresh').onclick = function () { location.reload(); };
+})();
+</script></body></html>`;
+
 function escapeHtmlText(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -548,6 +599,56 @@ class FileStation {
       'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
     });
     res.end(body);
+  }
+
+  /** 电脑端管理页：列出设备并给出允许/拒绝/撤销按钮。 */
+  renderAdmin(res) {
+    const devs = Object.values(this.devices);
+    const fmt = (t) => { try { return new Date(t).toLocaleString('zh-CN', { hour12: false }); } catch { return ''; } };
+    const row = (d, actions) => '<div class="row"><div><span class="name">' + escapeHtmlText(d.name) + '</span>' +
+      '<span class="muted">' + escapeHtmlText(d.id.slice(0, 8)) + ' · ' + escapeHtmlText(fmt(d.lastSeen)) + '</span></div>' +
+      '<div class="acts">' + actions + '</div></div>';
+    const btn = (d, action, label, cls) => '<button class="' + cls + '" data-id="' + d.id + '" data-action="' + action + '">' + label + '</button>';
+    const pending = devs.filter((d) => d.status === 'pending');
+    const approved = devs.filter((d) => d.status === 'approved');
+    const blocked = devs.filter((d) => d.status === 'blocked');
+    const pendingHtml = pending.length
+      ? pending.map((d) => row(d, btn(d, 'approve', '允许', 'ok') + btn(d, 'deny', '拒绝', 'no'))).join('')
+      : '<p class="empty">没有待确认设备</p>';
+    const approvedHtml = approved.length
+      ? approved.map((d) => row(d, btn(d, 'revoke', '撤销', 'no'))).join('')
+      : '<p class="empty">还没有已授权设备</p>';
+    const blockedHtml = blocked.length
+      ? blocked.map((d) => row(d, btn(d, 'approve', '改为允许', 'ok'))).join('')
+      : '<p class="empty">没有</p>';
+    const body = Buffer.from(ADMIN_PAGE
+      .replace('__PENDING__', pendingHtml)
+      .replace('__APPROVED__', approvedHtml)
+      .replace('__BLOCKED__', blockedHtml), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': body.length,
+      'Cache-Control': 'no-store',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+    });
+    res.end(body);
+  }
+
+  async handlePairAdminAction(req, res) {
+    if (!this.isLoopback(req)) return this.safeJson(res, 403, { ok: false, error: 'loopback only' });
+    if (!this.sameSite(req)) return this.safeJson(res, 403, { ok: false, error: 'cross-site request rejected' });
+    let body;
+    try { body = await this.readBody(req, 4096); } catch { return this.safeJson(res, 413, { ok: false, error: '请求过大' }); }
+    let payload = {};
+    try { payload = JSON.parse(body.toString('utf8')) || {}; } catch { return this.safeJson(res, 400, { ok: false, error: '无效的 JSON' }); }
+    const id = String(payload.id || '');
+    const action = String(payload.action || '');
+    if (!/^[a-f0-9]{32}$/.test(id) || !this.devices[id]) return this.safeJson(res, 404, { ok: false, error: '设备不存在' });
+    if (action !== 'approve' && action !== 'deny' && action !== 'revoke') return this.safeJson(res, 400, { ok: false, error: '无效的操作' });
+    this.setDeviceStatus(id, action === 'approve' ? 'approved' : action === 'deny' ? 'blocked' : 'pending');
+    return this.safeJson(res, 200, { ok: true, status: this.devices[id].status });
   }
 
   // ---------- 启动 / 停止 ----------
@@ -1245,6 +1346,14 @@ class FileStation {
     // CA 证书：手机要先装它才信任 HTTPS；通过 HTTP 端口下载，避免先遇到证书警告。
     if ((req.method === 'GET' || req.method === 'HEAD') && route === '/pwa/ca.crt') {
       return this.serveCa(res, req.method === 'HEAD');
+    }
+    // 本机管理页：只允许 loopback，不要求令牌（手机拿不到这个页面）。
+    if ((req.method === 'GET' || req.method === 'HEAD') && route === '/pair-admin') {
+      if (!this.isLoopback(req)) return this.safeJson(res, 403, { ok: false, error: 'loopback only' });
+      return this.renderAdmin(res);
+    }
+    if (req.method === 'POST' && route === '/pair-admin/action') {
+      return this.handlePairAdminAction(req, res);
     }
     if (!this.auth(req, url)) {
       const wait = this.retryAfter(req);
@@ -1976,6 +2085,8 @@ class FileStation {
       ok: true,
       running: this.running,
       port: this.port || this.portPref,
+      adminUrl: 'http://127.0.0.1:' + (this.port || this.portPref) + '/pair-admin',
+      pendingDevices: Object.values(this.devices).filter((d) => d.status === 'pending').length,
       // 默认只给遮码后的地址；完整地址与二维码要手动「显示」后才签发
       lanUrlMasked: this.maskedUrl(),
       localUrlMasked: this.localUrl().replace(/k=.*$/, 'k=••••••••••••'),

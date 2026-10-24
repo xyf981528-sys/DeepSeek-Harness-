@@ -6,4 +6,4 @@
         notifyAgentMaxChars: 1500
         requireApproval: true
         trustLoopback: true
-        pairDialog: true
+        pairDialog: false
