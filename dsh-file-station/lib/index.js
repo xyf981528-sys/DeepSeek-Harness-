@@ -15,6 +15,8 @@ import https from 'node:https';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import qrcode from './vendor/qrcode.js';
 import { renderPhonePage } from './phone-page.js';
 
@@ -309,7 +311,8 @@ export function apply(ctx, config = {}) {
       logger: (line) => ctx.logger ? ctx.logger.info(line) : undefined,
       requireApproval: config.requireApproval !== false,
       trustLoopback: config.trustLoopback !== false,
-      pairDialog: config.pairDialog !== false,
+      pairDialog: config.pairDialog === true,
+      tunnel: config.tunnel === true,
     });
   } catch (err) {
     boot('constructor failed: ' + String(err && err.stack || err));
@@ -330,8 +333,24 @@ export function apply(ctx, config = {}) {
     });
     station.setAgentNotifier((entry) => {
       if (config.notifyAgent === false) return;
-      const agent = liveAgent;
-      if (!hasFollowup(agent)) return;
+      let agent = liveAgent;
+      // 重启后当前会话的 agent 可能先于本插件创建（收不到 agent/created），
+      // 这里兜底从 agents 注册表取最新的可用 agent。
+      if (!hasFollowup(agent)) {
+        try {
+          const reg = ctx.get('agents');
+          const list = reg && (typeof reg.roots === 'function' ? reg.roots() : (typeof reg.list === 'function' ? reg.list() : []));
+          const usable = (list || []).filter(hasFollowup);
+          if (usable.length) {
+            agent = usable[usable.length - 1];
+            liveAgent = agent;
+          }
+        } catch { /* ignore */ }
+      }
+      if (!hasFollowup(agent)) {
+        try { station.log('AGENT-NOTIFY: 没有可用的 agent，消息只进收件箱'); } catch { /* ignore */ }
+        return;
+      }
       const max = Number(config.notifyAgentMaxChars) > 0 ? Number(config.notifyAgentMaxChars) : 1500;
       const body = String(entry.text || '').slice(0, max);
       const text = '【手机文件传输台】手机端来了一条消息（' + entry.t + '）：\n' + body;
@@ -401,7 +420,7 @@ export function apply(ctx, config = {}) {
 }
 
 class FileStation {
-  constructor({ dataDir, port, logger, requireApproval, trustLoopback, pairDialog }) {
+  constructor({ dataDir, port, logger, requireApproval, trustLoopback, pairDialog, tunnel }) {
     // 装进 profile 时 data 可能是指回 D 盘的目录联接/符号链接，解析成真实路径，
     // 让日志和界面显示真实数据位置（首次运行目录还不存在时忽略）。
     try { dataDir = fs.realpathSync(dataDir); } catch { /* 目录尚未创建 */ }
@@ -410,7 +429,8 @@ class FileStation {
     this.logger = logger;
     this.requireApproval = requireApproval !== false;
     this.trustLoopback = trustLoopback !== false;
-    this.pairDialog = pairDialog !== false;
+    this.pairDialog = pairDialog === true;
+    this.tunnel = tunnel === true;
     this.uploadDir = path.join(dataDir, '上传');
     this.shareDir = path.join(dataDir, '共享');
     this.tokenFile = path.join(dataDir, '_token.txt');
@@ -437,6 +457,10 @@ class FileStation {
     this.devices = {};
     this.devicesSavedAt = 0;
     this.pairDialogs = new Set();
+    this.tunnelUrl = '';
+    this.tunnelState = 'off';
+    this.tunnelChild = null;
+    this.tunnelTimer = 0;
     this.loadDevices();
   }
 
@@ -495,6 +519,9 @@ class FileStation {
   }
 
   isLoopback(req) {
+    const h = req.headers || {};
+    // 经 Cloudflare Tunnel 转发进来的请求，源地址也是 127.0.0.1，必须按“外部设备”处理。
+    if (h['cf-connecting-ip'] || h['cf-ray'] || h['x-forwarded-for'] || h['x-real-ip']) return false;
     const a = String(req.socket && req.socket.remoteAddress || '');
     return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
   }
@@ -687,6 +714,7 @@ class FileStation {
         this.reveal = null;
         this.log('=== 启动 === host=' + host + ' port=' + port + ' lan=' + this.lanUrl());
         setImmediate(() => this.startHttps());
+        if (this.tunnel) setImmediate(() => this.startTunnel());
       };
       const onError = (err) => {
         server.removeListener('error', onError);
@@ -771,7 +799,75 @@ class FileStation {
     attempt();
   }
 
+  // ---------- Cloudflare Quick Tunnel（可选外网通道，真证书 https） ----------
+
+  async ensureCloudflared() {
+    const dir = path.join(this.dataDir, 'bin');
+    fs.mkdirSync(dir, { recursive: true });
+    const bin = path.join(dir, 'cloudflared.exe');
+    try { if (fs.statSync(bin).size > 1024 * 1024) return bin; } catch { /* download */ }
+    this.log('TUNNEL: 下载 cloudflared.exe …');
+    const res = await fetch('https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe');
+    if (!res.ok || !res.body) throw new Error('cloudflared HTTP ' + res.status);
+    const tmp = bin + '.part';
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
+    fs.renameSync(tmp, bin);
+    this.log('TUNNEL: cloudflared 就绪 ' + fs.statSync(bin).size + ' B');
+    return bin;
+  }
+
+  async startTunnel() {
+    if (this.tunnelChild || this.tunnelState === 'starting') return;
+    this.tunnelState = 'starting';
+    try {
+      const bin = await this.ensureCloudflared();
+      const child = execFile(bin, ['tunnel', '--url', 'http://127.0.0.1:' + (this.port || this.portPref), '--no-autoupdate'], { windowsHide: true });
+      this.tunnelChild = child;
+      const scan = (d) => {
+        const m = String(d).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+        if (m && !this.tunnelUrl) {
+          this.tunnelUrl = m[0];
+          this.tunnelState = 'on';
+          this.log('TUNNEL: ' + this.tunnelUrl);
+        }
+      };
+      child.stdout.on('data', scan);
+      child.stderr.on('data', scan);
+      child.on('exit', (code) => {
+        if (this.tunnelChild === child) this.tunnelChild = null;
+        if (this.tunnelState === 'on' || this.tunnelState === 'starting') {
+          this.tunnelState = 'off';
+          this.tunnelUrl = '';
+          this.log('TUNNEL: 退出 code=' + code);
+        }
+      });
+      clearTimeout(this.tunnelTimer);
+      this.tunnelTimer = setTimeout(() => {
+        if (this.tunnelState === 'starting') {
+          this.tunnelState = 'error';
+          this.log('TUNNEL: 45 秒未拿到地址');
+        }
+      }, 45000);
+    } catch (err) {
+      this.tunnelState = 'error';
+      this.log('TUNNEL-ERR: ' + String(err && err.message || err));
+    }
+  }
+
+  stopTunnel() {
+    clearTimeout(this.tunnelTimer);
+    this.tunnelTimer = 0;
+    const child = this.tunnelChild;
+    this.tunnelChild = null;
+    this.tunnelUrl = '';
+    this.tunnelState = 'off';
+    if (child) {
+      try { child.kill(); } catch { /* ignore */ }
+    }
+  }
+
   stop() {
+    this.stopTunnel();
     for (const srv of [this.httpsServer, this.server]) {
       if (!srv) continue;
       try { srv.close(); } catch { /* ignore */ }
@@ -787,6 +883,7 @@ class FileStation {
   }
 
   lanUrl() {
+    if (this.tunnelUrl) return this.tunnelUrl + '/?k=' + this.token;
     const ip = this.lanIp();
     const httpsOn = Boolean(this.httpsPort);
     const scheme = httpsOn ? 'https' : 'http';
@@ -2087,6 +2184,8 @@ class FileStation {
       port: this.port || this.portPref,
       adminUrl: 'http://127.0.0.1:' + (this.port || this.portPref) + '/pair-admin',
       pendingDevices: Object.values(this.devices).filter((d) => d.status === 'pending').length,
+      tunnelState: this.tunnelState,
+      tunnelUrl: this.tunnelUrl,
       // 默认只给遮码后的地址；完整地址与二维码要手动「显示」后才签发
       lanUrlMasked: this.maskedUrl(),
       localUrlMasked: this.localUrl().replace(/k=.*$/, 'k=••••••••••••'),

@@ -7,3 +7,4 @@
         requireApproval: true
         trustLoopback: true
         pairDialog: false
+        tunnel: false
