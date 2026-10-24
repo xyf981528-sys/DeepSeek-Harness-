@@ -1,6 +1,6 @@
 {
   "name": "dsh-file-station",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Phone <-> computer file transfer over the local network, served from the DSH Web GUI",
   "type": "module",

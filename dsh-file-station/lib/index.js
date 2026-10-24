@@ -393,36 +393,6 @@ export function apply(ctx, config = {}) {
           return;
         }
         if (!turnStarts.has(subjectId)) turnStarts.set(subjectId, Date.now());
-        const entry = { seq: ++seq, type, at: Date.now() };
-        if (type === 'assistant/message') {
-          const msg = event.data && event.data.message;
-          const text = (msg && Array.isArray(msg.content) ? msg.content.filter((c) => c && c.type === 'text').map((c) => c.text || '').join('') : '');
-          if (!text.trim()) return;
-          entry.text = text.slice(0, 2000);
-        } else if (type === 'tool/call') {
-          let brief = '';
-          try {
-            const raw = event.data && event.data.arguments;
-            const arg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            if (arg && typeof arg === 'object') {
-              brief = arg.file_path || arg.command || arg.path || arg.url || arg.query || arg.target || '';
-            }
-          } catch { /* ignore */ }
-          entry.text = String(event.data && event.data.name || '工具') + (brief ? ' · ' + String(brief).slice(0, 160) : '');
-        } else if (type === 'tool/result') {
-          const m = event.data && event.data.message;
-          const blocks = m && Array.isArray(m.content) ? m.content : [];
-          const textPart = blocks.filter((b) => b && b.type === 'text').map((b) => b.text || '').join(' ').trim();
-          const hasImage = blocks.some((b) => b && b.type === 'image');
-          entry.text = (textPart ? textPart.slice(0, 400) : '') +
-            (hasImage ? (textPart ? '\n' : '') + '🖼 图片结果' : '') || '工具返回';
-        } else if (type === 'turn/end') {
-          entry.text = '本轮结束';
-        } else {
-          return;
-        }
-        liveEntries.push(entry);
-        if (liveEntries.length > 200) liveEntries.splice(0, liveEntries.length - 200);
         if (type === 'turn/end') {
           const started = turnStarts.get(subjectId) || 0;
           turnStarts.delete(subjectId);
@@ -434,7 +404,14 @@ export function apply(ctx, config = {}) {
             const used = mm ? (mm + ' 分 ' + ss + ' 秒') : (ss + ' 秒');
             station.inboxAppend('✅ 任务已完成（用时 ' + used + '）', false, { from: 'pc', kind: 'msg' });
           }
+          return;
         }
+        if (type !== 'assistant/message') return;
+        const msg = event.data && event.data.message;
+        const text = (msg && Array.isArray(msg.content) ? msg.content.filter((c) => c && c.type === 'text').map((c) => c.text || '').join('') : '');
+        if (!text.trim()) return;
+        liveEntries.push({ seq: ++seq, type, at: Date.now(), text: text.slice(0, 4000) });
+        if (liveEntries.length > 50) liveEntries.splice(0, liveEntries.length - 50);
       } catch { /* ignore */ }
     });
     return () => { try { off(); } catch { /* ignore */ } };

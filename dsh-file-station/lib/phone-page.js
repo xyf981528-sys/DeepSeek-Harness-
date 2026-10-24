@@ -511,26 +511,24 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
   var liveSeq = 0;
   function loadLive() {
-    return fetch('/live?after=' + liveSeq).then(function (r) { return r.json(); }).then(function (r) {
-      if (!r || !r.ok || !Array.isArray(r.items)) return;
+    return fetch('/live?after=0').then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok || !Array.isArray(r.items) || !r.items.length) return;
+      var last = r.items[r.items.length - 1];
+      if (!last || !last.text || last.seq === liveSeq) return;
       var box = $('l-live');
       if (!box) return;
-      r.items.forEach(function (it) {
-        liveSeq = Math.max(liveSeq, it.seq || 0);
-        var d = document.createElement('div');
-        d.className = 'live';
-        var h = document.createElement('div');
-        h.className = 'lt';
-        var label = it.type === 'assistant/message' ? '助手' : it.type === 'tool/call' ? '工具' : it.type === 'tool/result' ? '结果' : '系统';
-        h.textContent = label + ' · ' + new Date(it.at || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
-        var b = document.createElement('div');
-        b.textContent = it.text || '';
-        d.appendChild(h);
-        d.appendChild(b);
-        box.appendChild(d);
-        if (box.children.length > 40) box.removeChild(box.firstChild);
-      });
-      if (box.lastChild) box.scrollTop = box.scrollHeight;
+      liveSeq = last.seq;
+      box.textContent = '';
+      var d = document.createElement('div');
+      d.className = 'live';
+      var h = document.createElement('div');
+      h.className = 'lt';
+      h.textContent = '助手 · ' + new Date(last.at || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+      var b = document.createElement('div');
+      b.textContent = last.text;
+      d.appendChild(h);
+      d.appendChild(b);
+      box.appendChild(d);
     }).catch(function () {});
   }
   loadLive();
