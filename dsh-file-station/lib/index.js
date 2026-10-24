@@ -316,6 +316,7 @@ class FileStation {
     this.migrateQueueToInbox();
     this.loadToken();
     this.loadExtraDirs();
+    this.cleanupChunks();
     try { fs.writeFileSync(this.notifyScript, NOTIFY_PS, 'ascii'); } catch { /* ignore */ }
 
     const server = http.createServer((req, res) => {
@@ -1033,6 +1034,9 @@ class FileStation {
       if (req.method === 'GET' && route === '/shot.png') return this.handleShotImage(res);
       if (req.method === 'GET' && route === '/download') return this.handleDownload(req, res, url);
       if (req.method === 'POST' && route === '/upload') return this.handleUpload(req, res);
+      if (req.method === 'POST' && route === '/upload/chunk') return this.handleChunkPost(req, res);
+      if (req.method === 'POST' && route === '/upload/complete') return this.handleCompletePost(req, res);
+      if (req.method === 'POST' && route === '/upload/abort') return this.handleAbortPost(req, res);
       if (req.method === 'POST' && route === '/text') return this.handleTextPost(req, res);
       if (req.method === 'POST' && route === '/shot') return this.handleShotPost(req, res);
       if (req.method === 'POST' && route === '/queue') return this.handleQueue(req, res);
@@ -1245,6 +1249,157 @@ class FileStation {
       req.on('error', reject);
     });
     return Buffer.concat(chunks);
+  }
+
+  // ---------- 分片上传（大文件，支持断点续传） ----------
+
+  chunkRoot() {
+    return path.join(this.dataDir, '_chunks');
+  }
+
+  chunkDir(uploadId) {
+    return path.join(this.chunkRoot(), uploadId);
+  }
+
+  /** 启动时清掉超过 24 小时的残留分片，避免失败上传占满磁盘。 */
+  cleanupChunks() {
+    let names = [];
+    try { names = fs.readdirSync(this.chunkRoot()); } catch { return; }
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    for (const name of names) {
+      if (name === '_aborted') continue;
+      const dir = path.join(this.chunkRoot(), name);
+      try {
+        if (fs.statSync(dir).mtimeMs < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+      } catch { /* ignore */ }
+    }
+    const abortedDir = path.join(this.chunkRoot(), '_aborted');
+    let marks = [];
+    try { marks = fs.readdirSync(abortedDir); } catch { /* none */ }
+    for (const mark of marks) {
+      const p = path.join(abortedDir, mark);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+      } catch { /* ignore */ }
+    }
+  }
+
+  /** 取消标记：防止 abort 之后仍在途的分片把目录重新建回来。 */
+  abortedMark(uploadId) {
+    return path.join(this.chunkRoot(), '_aborted', uploadId);
+  }
+
+  /** 一片一个请求；分片落在 data/_chunks/<uploadId>/<index>.part。 */
+  async handleChunkPost(req, res) {
+    const id = String(req.headers['x-upload-id'] || '');
+    if (!/^[a-f0-9]{32}$/.test(id)) return this.safeJson(res, 400, { ok: false, error: '无效的上传 ID' });
+    const index = Number(req.headers['x-chunk-index']);
+    const total = Number(req.headers['x-chunk-total']);
+    if (!Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total < 1 || index >= total || total > 10000) {
+      return this.safeJson(res, 400, { ok: false, error: '无效的分片参数' });
+    }
+    let rawName = req.headers['x-file-name'];
+    try { rawName = decodeURIComponent(String(rawName || '')); } catch { /* 保留原样 */ }
+    const name = this.safeName(rawName);
+    if (!name) return this.safeJson(res, 400, { ok: false, error: '缺少文件名' });
+    const size = Number(req.headers['x-file-size'] || 0);
+    if (Number.isFinite(size) && size > MAX_UPLOAD) return this.safeJson(res, 413, { ok: false, error: '单个文件超过 8 GB 上限' });
+    const toShare = String(req.headers['x-dest'] || '') === 'share';
+    const destDir = toShare ? this.shareDir : this.uploadDir;
+    if (size > 0) {
+      let free = 0;
+      try { const st = fs.statfsSync(destDir); free = st.bavail * st.bsize; } catch { free = 0; }
+      if (free && size + FREE_MARGIN > free) return this.safeJson(res, 507, { ok: false, error: '电脑磁盘空间不足' });
+    }
+    let body;
+    try { body = await this.readBody(req, Math.min(MAX_UPLOAD, 32 * 1024 * 1024)); } catch {
+      return this.safeJson(res, 413, { ok: false, error: '分片过大' });
+    }
+    if (!body || !body.length) return this.safeJson(res, 400, { ok: false, error: '空分片' });
+    if (fs.existsSync(this.abortedMark(id))) {
+      return this.safeJson(res, 410, { ok: false, error: '上传已取消' });
+    }
+    try {
+      const dir = this.chunkDir(id);
+      fs.mkdirSync(dir, { recursive: true });
+      const target = path.join(dir, index + '.part');
+      const temp = target + '.tmp';
+      fs.writeFileSync(temp, body);
+      fs.renameSync(temp, target);
+    } catch (err) {
+      return this.safeJson(res, 500, { ok: false, error: '分片保存失败：' + String(err && err.message || err) });
+    }
+    if (fs.existsSync(this.abortedMark(id))) {
+      try { fs.rmSync(this.chunkDir(id), { recursive: true, force: true }); } catch { /* ignore */ }
+      return this.safeJson(res, 410, { ok: false, error: '上传已取消' });
+    }
+    return this.safeJson(res, 200, { ok: true, index, bytes: body.length });
+  }
+
+  /** 全部分片到齐后合并；校验数量/总大小，再原子改名。 */
+  async handleCompletePost(req, res) {
+    let body;
+    try { body = await this.readBody(req, 64 * 1024); } catch { return this.safeJson(res, 413, { ok: false, error: '请求过大' }); }
+    let payload = {};
+    try { payload = JSON.parse(body.toString('utf8')) || {}; } catch { return this.safeJson(res, 400, { ok: false, error: '无效的 JSON' }); }
+    const id = String(payload.uploadId || '');
+    if (!/^[a-f0-9]{32}$/.test(id)) return this.safeJson(res, 400, { ok: false, error: '无效的上传 ID' });
+    const name = this.safeName(String(payload.name || ''));
+    const total = Number(payload.total);
+    const size = Number(payload.size);
+    if (!name || !Number.isInteger(total) || total < 1 || total > 10000 || !Number.isSafeInteger(size) || size < 0 || size > MAX_UPLOAD) {
+      return this.safeJson(res, 400, { ok: false, error: '无效的合并参数' });
+    }
+    const toShare = payload.to === 'share';
+    const destDir = toShare ? this.shareDir : this.uploadDir;
+    const dir = this.chunkDir(id);
+    let sum = 0;
+    try {
+      for (let i = 0; i < total; i++) {
+        const part = path.join(dir, i + '.part');
+        const st = fs.statSync(part);
+        if (!st.isFile()) throw new Error('bad part');
+        sum += st.size;
+      }
+    } catch {
+      return this.safeJson(res, 409, { ok: false, error: '分片不完整，请重试', missing: true });
+    }
+    if (sum !== size) {
+      return this.safeJson(res, 409, { ok: false, error: '分片总大小不一致，请重试', missing: true });
+    }
+    const finalPath = this.uniquePath(path.join(destDir, name));
+    const temp = path.join(destDir, '.' + crypto.randomBytes(4).toString('hex') + '.part');
+    try {
+      const fd = fs.openSync(temp, 'w');
+      try {
+        for (let i = 0; i < total; i++) fs.writeSync(fd, fs.readFileSync(path.join(dir, i + '.part')));
+      } finally { fs.closeSync(fd); }
+      fs.renameSync(temp, finalPath);
+    } catch (err) {
+      try { fs.unlinkSync(temp); } catch { /* ignore */ }
+      return this.safeJson(res, 500, { ok: false, error: '合并失败：' + String(err && err.message || err) });
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { fs.unlinkSync(this.abortedMark(id)); } catch { /* ignore */ }
+    this.log((toShare ? '共享 ' : '上传 ') + path.basename(finalPath) + ' (' + size + ' B, ' + total + ' 片)');
+    this.lastUpload = { name: path.basename(finalPath), size, t: this.stamp(), at: Date.now(), to: toShare ? 'share' : 'upload' };
+    return this.safeJson(res, 200, { ok: true, saved: finalPath, name: path.basename(finalPath), size });
+  }
+
+  async handleAbortPost(req, res) {
+    let body;
+    try { body = await this.readBody(req, 4096); } catch { return this.safeJson(res, 413, { ok: false, error: '请求过大' }); }
+    let payload = {};
+    try { payload = JSON.parse(body.toString('utf8')) || {}; } catch { /* ignore */ }
+    const id = String(payload.uploadId || '');
+    if (/^[a-f0-9]{32}$/.test(id)) {
+      try {
+        fs.mkdirSync(path.join(this.chunkRoot(), '_aborted'), { recursive: true });
+        fs.writeFileSync(this.abortedMark(id), String(Date.now()));
+      } catch { /* ignore */ }
+      try { fs.rmSync(this.chunkDir(id), { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    return this.safeJson(res, 200, { ok: true });
   }
 
   async handleUpload(req, res, forceShare = false) {

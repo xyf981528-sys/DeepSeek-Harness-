@@ -124,8 +124,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   <div class="card">
     <h2><span class="ico">⬆</span>上传文件到电脑</h2>
     <input type="file" id="f-up" multiple>
-    <div class="row" style="margin-top:10px"><button class="primary" id="b-up">开始上传</button><span class="muted" id="s-up"></span></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="b-up">开始上传</button><button id="b-cancel" style="display:none">取消</button><span class="muted" id="s-up"></span></div>
     <progress id="p-up" value="0" max="100" style="display:none"></progress>
+    <div class="muted tinytip">大文件自动分片（1 MB/片），断网后重新选同一个文件会从断点继续。</div>
   </div>
 
   <div class="card">
@@ -216,57 +217,179 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       .then(function () { b.disabled = false; });
   };
 
-  // ---- 上传 ----
+  // ---- 上传（小文件直传；大文件 1 MB 分片 + 断点续传 + 可取消） ----
+  var CHUNK_BYTES = 1024 * 1024;
+  var CHUNK_MIN = 6 * 1024 * 1024;
+  var upState = null; // { cancel, xhr, uploadId, file }
+
+  function upKey(f) { return 'fsc:' + f.name + ':' + f.size + ':' + (f.lastModified || 0); }
+  function upLoadResume(f) {
+    try {
+      var raw = localStorage.getItem(upKey(f));
+      if (!raw) return null;
+      var s = JSON.parse(raw);
+      if (!s || !/^[a-f0-9]{32}$/.test(s.id || '') || s.chunk !== CHUNK_BYTES) return null;
+      return s;
+    } catch (e) { return null; }
+  }
+  function upSaveResume(f, s) {
+    try { localStorage.setItem(upKey(f), JSON.stringify(s)); } catch (e) {}
+  }
+  function upClearResume(f) {
+    try { localStorage.removeItem(upKey(f)); } catch (e) {}
+  }
+  function randomId() {
+    var a = new Uint8Array(16);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  }
+  function postJson(url, obj) {
+    return fetch(url + qs(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(obj)
+    }).then(function (r) { return r.json().catch(function () { return {}; }); });
+  }
+  function sendChunk(f, id, index, total, onProgress) {
+    return new Promise(function (resolve, reject) {
+      var start = index * CHUNK_BYTES;
+      var blob = f.slice(start, Math.min(start + CHUNK_BYTES, f.size));
+      var xhr = new XMLHttpRequest();
+      if (upState) upState.xhr = xhr;
+      xhr.open('POST', '/upload/chunk' + qs());
+      xhr.setRequestHeader('X-Upload-Id', id);
+      xhr.setRequestHeader('X-Chunk-Index', String(index));
+      xhr.setRequestHeader('X-Chunk-Total', String(total));
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(f.name));
+      xhr.setRequestHeader('X-File-Size', String(f.size));
+      xhr.setRequestHeader('X-Dest', 'upload');
+      xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) onProgress(ev.loaded, ev.total); };
+      xhr.onload = function () {
+        var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 200 && r && r.ok) resolve(r);
+        else reject(new Error((r && r.error) || ('HTTP ' + xhr.status)));
+      };
+      xhr.onerror = function () { reject(new Error('网络中断')); };
+      xhr.onabort = function () { reject(new Error('已取消')); };
+      xhr.send(blob);
+    });
+  }
+  function uploadChunked(f, prog) {
+    var total = Math.max(1, Math.ceil(f.size / CHUNK_BYTES));
+    var s = upLoadResume(f);
+    if (!s || s.total !== total) s = { id: randomId(), chunk: CHUNK_BYTES, total: total, done: 0 };
+    if (upState) { upState.uploadId = s.id; upState.file = f; }
+    var restarted = false;
+    function run() {
+      if (upState && upState.cancel) throw new Error('已取消');
+      var i = s.done;
+      if (i >= total) {
+        return postJson('/upload/complete', { uploadId: s.id, name: f.name, total: total, size: f.size }).then(function (r) {
+          if (!r || !r.ok) {
+            var err = new Error((r && r.error) || '合并失败');
+            err.missing = !!(r && r.missing);
+            throw err;
+          }
+          upClearResume(f);
+          return r;
+        });
+      }
+      upSaveResume(f, s);
+      return sendChunk(f, s.id, i, total, function (loaded, len) { prog(i + loaded / len); }).then(function () {
+        s.done = i + 1;
+        upSaveResume(f, s);
+        prog(s.done);
+        return run();
+      });
+    }
+    return Promise.resolve().then(run).catch(function (err) {
+      if (err && err.missing && !restarted) {
+        restarted = true;
+        s = { id: randomId(), chunk: CHUNK_BYTES, total: total, done: 0 };
+        if (upState) upState.uploadId = s.id;
+        return run();
+      }
+      throw err;
+    });
+  }
+  function uploadSingle(f, prog) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      if (upState) { upState.xhr = xhr; upState.file = f; }
+      xhr.open('POST', '/upload' + qs());
+      xhr.setRequestHeader('X-Filename', encodeURIComponent(f.name));
+      xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) prog(ev.loaded / ev.total); };
+      xhr.onload = function () {
+        var r = null; try { r = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 200 && r && r.ok) resolve(r);
+        else reject(new Error((r && r.error) || ('HTTP ' + xhr.status)));
+      };
+      xhr.onerror = function () { reject(new Error('网络中断')); };
+      xhr.onabort = function () { reject(new Error('已取消')); };
+      xhr.send(f);
+    });
+  }
+
   $('b-up').onclick = function () {
     var files = Array.prototype.slice.call($('f-up').files || []);
     if (!files.length) { set('s-up', '先选文件', 'err'); return; }
-    var i = 0, totalBytes = 0;
+    if (upState) return;
+    upState = { cancel: false, xhr: null, uploadId: null, file: null };
+    var cancelBtn = $('b-cancel');
+    if (cancelBtn) cancelBtn.style.display = '';
     var bar = $('p-up');
     bar.style.display = 'block'; bar.value = 0;
+    var i = 0, totalMB = 0;
+    $('b-up').disabled = true;
+    function finish() {
+      upState = null;
+      $('b-up').disabled = false;
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      bar.style.display = 'none';
+      $('f-up').value = '';
+    }
     function next() {
       if (i >= files.length) {
-        set('s-up', '全部上传完成：' + totalBytes.toFixed(1) + ' MB', 'ok');
-        toast('✅ 全部 ' + files.length + ' 个文件已传完（' + totalBytes.toFixed(1) + ' MB）', 'ok');
-        $('f-up').value = '';
-        bar.style.display = 'none';
+        set('s-up', '全部上传完成：' + totalMB.toFixed(1) + ' MB', 'ok');
+        toast('✅ 全部 ' + files.length + ' 个文件已传完（' + totalMB.toFixed(1) + ' MB）', 'ok');
+        finish();
         loadFiles(currentDir);
         return;
       }
       var f = files[i];
-      set('s-up', '(' + (i + 1) + '/' + files.length + ') ' + f.name);
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload' + qs());
-      xhr.setRequestHeader('X-Filename', encodeURIComponent(f.name));
-      xhr.upload.onprogress = function (ev) {
-        if (ev.lengthComputable) {
-          var p = Math.round(ev.loaded / ev.total * 100);
-          bar.value = p;
-          set('s-up', '(' + (i + 1) + '/' + files.length + ') ' + f.name + ' ' +
-            fmt(ev.loaded) + '/' + fmt(ev.total) + ' ' + p + '%');
-        }
+      var label = '(' + (i + 1) + '/' + files.length + ') ' + f.name;
+      set('s-up', label);
+      var pct = function (frac) {
+        if (!upState || upState.cancel) return;
+        var p = Math.max(0, Math.min(100, Math.round(frac * 100)));
+        bar.value = p;
+        set('s-up', label + ' ' + p + '%');
       };
-      xhr.onload = function () {
-        var r = null;
-        try { r = JSON.parse(xhr.responseText); } catch (e) {}
-        if (xhr.status === 200 && r && r.ok) {
-          totalBytes += f.size / 1048576; i++;
-          toast('✅ ' + f.name + ' 已传完', 'ok');
-          next();
-        } else {
-          set('s-up', f.name + ' 上传失败：' + ((r && r.error) || ('HTTP ' + xhr.status)), 'err');
-          toast('❌ ' + f.name + ' 上传失败', 'err');
-          bar.style.display = 'none';
-          $('b-up').disabled = false;
-        }
-      };
-      xhr.onerror = function () {
-        set('s-up', f.name + ' 网络中断，重试一次', 'err');
-        $('b-up').disabled = false; bar.style.display = 'none';
-      };
-      xhr.send(f);
+      var job = f.size > CHUNK_MIN
+        ? uploadChunked(f, function (done) { pct(done / Math.max(1, Math.ceil(f.size / CHUNK_BYTES))); })
+        : uploadSingle(f, pct);
+      job.then(function () {
+        totalMB += f.size / 1048576;
+        i++;
+        toast('✅ ' + f.name + ' 已传完', 'ok');
+        next();
+      }).catch(function (err) {
+        if (upState && upState.cancel) set('s-up', '已取消', 'err');
+        else { set('s-up', f.name + ' 上传失败：' + (err && err.message || err), 'err'); toast('❌ ' + f.name + ' 上传失败', 'err'); }
+        finish();
+      });
     }
-    $('b-up').disabled = true;
     next();
+  };
+
+  $('b-cancel').onclick = function () {
+    if (!upState) return;
+    upState.cancel = true;
+    try { if (upState.xhr) upState.xhr.abort(); } catch (e) {}
+    var id = upState.uploadId;
+    var f = upState.file;
+    if (f) upClearResume(f);
+    if (id) postJson('/upload/abort', { uploadId: id }).catch(function () {});
   };
 
   // ---- 对话（文字 / 留言，双向） ----
