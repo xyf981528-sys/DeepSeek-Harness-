@@ -113,6 +113,14 @@
 - `versionCode=3`、`versionName=1.2`，已签名，产物复制到 `data\共享\filestation.apk` 和 `data\共享\文件传输台.apk`。
 - 旧 APK 需覆盖安装；首次打开后仍从服务器加载页面，刷新即可。
 
+## APK 1.3（2026-10-24 17:24）
+
+- 内置下载器：`MainActivity` 用 `HttpURLConnection` 直接拉取 signed ticket URL，带进度对话框和取消。
+- Android 10+ 写入 `MediaStore.Downloads`（下载/文件传输台）；Android 9 及以下写公共下载目录并申请权限。
+- `/download` 链接和 `DownloadListener` 都走内置下载，不再跳浏览器。
+- `versionCode=4`、`versionName=1.3`，已签名，产物在 `android/dist/filestation.apk` 与共享目录。
+
+
 
 
 

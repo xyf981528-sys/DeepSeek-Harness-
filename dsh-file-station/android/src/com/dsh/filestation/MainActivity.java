@@ -2,14 +2,18 @@ package com.dsh.filestation;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
+import android.app.ProgressDialog;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.text.InputType;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -30,6 +34,17 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /** 文件传输台的 Android WebView 壳：加载手机页，处理文件选择与下载。 */
 public class MainActivity extends Activity {
     private static final int REQ_FILE = 1001;
@@ -37,6 +52,9 @@ public class MainActivity extends Activity {
     private TextView status;
     private ValueCallback<Uri[]> fileCallback;
     private SharedPreferences prefs;
+    private volatile boolean dlCancel;
+    private volatile HttpURLConnection dlConn;
+    private ProgressDialog dlDialog;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -91,7 +109,7 @@ public class MainActivity extends Activity {
                     // 下载链接交给系统浏览器：APK 内 WebView 的 DownloadManager 在部分机型会失败，
                     // 浏览器路径与手机网页一致，且 ticket URL 不依赖 Cookie。
                     if (u.getPath() != null && u.getPath().startsWith("/download")) {
-                        openInBrowser(u);
+                        startDownload(u.toString(), null, null);
                         return true;
                     }
                     if (self != null && host.equals(self)) return false;
@@ -163,7 +181,7 @@ public class MainActivity extends Activity {
         });
 
         web.setDownloadListener((url, ua, cd, mime, len) -> {
-            openInBrowser(Uri.parse(url));
+            startDownload(url, cd, mime);
         });
 
         String url = prefs.getString("url", "");
@@ -179,6 +197,148 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "已交给浏览器下载", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, "没有可用的浏览器：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String fileNameFrom(String url, String cd, String mime) {
+        String name = null;
+        if (cd != null && !cd.isEmpty()) {
+            Matcher m = Pattern.compile("filename\\*?=(?:UTF-8'')?[\"']?([^\"';]+)", Pattern.CASE_INSENSITIVE).matcher(cd);
+            if (m.find()) {
+                try { name = URLDecoder.decode(m.group(1), "UTF-8"); } catch (Exception e) { name = m.group(1); }
+            }
+        }
+        if (name == null || name.trim().isEmpty()) {
+            try {
+                URL u = new URL(url);
+                String q = u.getQuery();
+                if (q != null) {
+                    for (String part : q.split("&")) {
+                        if (part.startsWith("p=")) {
+                            String raw = URLDecoder.decode(part.substring(2), "UTF-8");
+                            int slash = raw.lastIndexOf('/');
+                            name = slash >= 0 ? raw.substring(slash + 1) : raw;
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) { /* ignore */ }
+        }
+        if (name == null || name.trim().isEmpty()) name = "download";
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (name.isEmpty()) name = "download";
+        if (name.length() > 120) name = name.substring(0, 120);
+        return name;
+    }
+
+    private void stopDownload() {
+        dlCancel = true;
+        try { if (dlConn != null) dlConn.disconnect(); } catch (Exception e) { /* ignore */ }
+    }
+
+    private void startDownload(String url, String contentDisposition, String mime) {
+        if (dlDialog != null && dlDialog.isShowing()) {
+            Toast.makeText(this, "已有下载任务", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        dlCancel = false;
+        final String name = fileNameFrom(url, contentDisposition, mime);
+        dlDialog = new ProgressDialog(this);
+        dlDialog.setTitle("正在下载");
+        dlDialog.setMessage(name);
+        dlDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+        dlDialog.setMax(100);
+        dlDialog.setProgress(0);
+        dlDialog.setCancelable(true);
+        dlDialog.setButton(android.content.DialogInterface.BUTTON_NEGATIVE, "取消", (d, w) -> stopDownload());
+        dlDialog.setOnCancelListener(d -> stopDownload());
+        dlDialog.show();
+        new Thread(() -> downloadToDevice(url, contentDisposition, mime, name)).start();
+    }
+
+    private void downloadToDevice(String url, String cd, String mime, String name) {
+        HttpURLConnection conn = null;
+        InputStream in = null;
+        OutputStream out = null;
+        Uri mediaUri = null;
+        File file = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            dlConn = conn;
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(60000);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestProperty("User-Agent", "DSHFileStationApp/1.3");
+            conn.connect();
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+            String type = conn.getContentType();
+            if (type == null || type.trim().isEmpty()) type = (mime == null || mime.trim().isEmpty()) ? "application/octet-stream" : mime;
+            long total = conn.getContentLengthLong();
+
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, type);
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/文件传输台");
+                cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                mediaUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (mediaUri == null) throw new IOException("无法创建下载文件");
+                out = getContentResolver().openOutputStream(mediaUri);
+            } else {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "文件传输台");
+                if (!dir.exists() && !dir.mkdirs()) throw new IOException("无法创建下载目录");
+                file = new File(dir, name);
+                out = new FileOutputStream(file);
+            }
+            if (out == null) throw new IOException("无法写入下载文件");
+
+            in = conn.getInputStream();
+            byte[] buf = new byte[64 * 1024];
+            long got = 0;
+            int last = -1;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                if (dlCancel) throw new IOException("已取消");
+                out.write(buf, 0, n);
+                got += n;
+                if (total > 0) {
+                    int p = (int) Math.min(100, got * 100 / total);
+                    if (p != last) {
+                        last = p;
+                        final int pp = p;
+                        runOnUiThread(() -> { if (dlDialog != null && dlDialog.isShowing()) dlDialog.setProgress(pp); });
+                    }
+                }
+            }
+            out.flush();
+            if (mediaUri != null) {
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                getContentResolver().update(mediaUri, done, null, null);
+            }
+            if (file != null) {
+                MediaScannerConnection.scanFile(this, new String[]{file.getAbsolutePath()}, new String[]{type}, null);
+            }
+            runOnUiThread(() -> {
+                if (dlDialog != null) { dlDialog.dismiss(); dlDialog = null; }
+                Toast.makeText(this, "已保存到 下载/文件传输台：" + name, Toast.LENGTH_LONG).show();
+            });
+        } catch (Exception e) {
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+            if (mediaUri != null) { try { getContentResolver().delete(mediaUri, null, null); } catch (Exception ignored) { } }
+            if (file != null && file.exists()) { try { file.delete(); } catch (Exception ignored) { } }
+            final boolean canceled = dlCancel;
+            final String msg = e.getMessage();
+            runOnUiThread(() -> {
+                if (dlDialog != null) { dlDialog.dismiss(); dlDialog = null; }
+                Toast.makeText(this, canceled ? "已取消下载" : ("下载失败：" + msg), Toast.LENGTH_LONG).show();
+            });
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+            if (conn != null) conn.disconnect();
+            dlConn = null;
         }
     }
 
