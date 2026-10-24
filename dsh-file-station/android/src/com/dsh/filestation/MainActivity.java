@@ -7,27 +7,34 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JsResult;
+import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 /** 文件传输台的 Android WebView 壳：加载手机页，处理文件选择与下载。 */
 public class MainActivity extends Activity {
     private static final int REQ_FILE = 1001;
     private WebView web;
+    private TextView status;
     private ValueCallback<Uri[]> fileCallback;
     private SharedPreferences prefs;
 
@@ -35,9 +42,20 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("fs", MODE_PRIVATE);
-        FrameLayout root = new FrameLayout(this);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        status = new TextView(this);
+        status.setTextSize(12);
+        status.setPadding(28, 18, 28, 18);
+        status.setTextColor(0xFF9FB3C8);
+        status.setBackgroundColor(0xFF0A0E13);
+        status.setText("正在启动…");
+        root.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         web = new WebView(this);
-        root.addView(web);
+        web.setBackgroundColor(0xFF0A0E13);
+        root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
         if (getActionBar() != null) getActionBar().setTitle("文件传输台");
 
@@ -58,7 +76,8 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setSupportZoom(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        s.setUserAgentString(s.getUserAgentString() + " DSHFileStationApp/1.0");
+        s.setUserAgentString(s.getUserAgentString() + " DSHFileStationApp/1.1");
+        WebView.setWebContentsDebuggingEnabled(true);
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -74,6 +93,35 @@ public class MainActivity extends Activity {
                     return true;
                 }
                 return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                status.setText("正在加载 " + url);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (status.getText().toString().startsWith("正在加载")) status.setText("已加载 " + url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request != null && request.isForMainFrame()) {
+                    status.setText("加载失败：" + error.getDescription() + "\n" + request.getUrl());
+                }
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, final SslErrorHandler handler, SslError error) {
+                handler.cancel();
+                status.setText("HTTPS 证书不受信任：" + (error == null ? "" : error.getUrl()));
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("HTTPS 证书不受信任")
+                        .setMessage("这个地址需要手机先安装证书。可以改用 HTTP 端口直接打开。")
+                        .setPositiveButton("改用 HTTP", (d, w) -> openHttpVersion())
+                        .setNegativeButton("取消", null)
+                        .show();
             }
         });
 
@@ -129,6 +177,18 @@ public class MainActivity extends Activity {
         else web.loadUrl(url);
     }
 
+    private void openHttpVersion() {
+        String u = web.getUrl();
+        if (u == null) u = prefs.getString("url", "");
+        String v = u.replaceFirst("^https://", "http://").replace(":19791", ":19790");
+        if (v.equals(u) || v.isEmpty()) {
+            status.setText("地址里没有 19791，请检查端口后重新设置");
+            return;
+        }
+        prefs.edit().putString("url", v).apply();
+        web.loadUrl(v);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQ_FILE) {
@@ -158,7 +218,7 @@ public class MainActivity extends Activity {
         input.setText(prefs.getString("url", ""));
         new AlertDialog.Builder(this)
                 .setTitle("连接地址")
-                .setMessage("在 DSH 面板点「显示连接地址」，把完整地址填到这里。局域网用 19790，https 用 19791。")
+                .setMessage("在 DSH 面板点「显示连接地址」。局域网用 http://IP:19790/?k=…；不要用 19791（需要证书）。")
                 .setView(input)
                 .setPositiveButton("保存并打开", (d, w) -> {
                     String u = input.getText().toString().trim();
@@ -173,14 +233,16 @@ public class MainActivity extends Activity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         menu.add(0, 1, 0, "设置地址");
-        menu.add(0, 2, 1, "重新加载");
+        menu.add(0, 2, 1, "用 HTTP 打开");
+        menu.add(0, 3, 2, "重新加载");
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == 1) { promptUrl(); return true; }
-        if (item.getItemId() == 2) { web.reload(); return true; }
+        if (item.getItemId() == 2) { openHttpVersion(); return true; }
+        if (item.getItemId() == 3) { web.reload(); return true; }
         return super.onOptionsItemSelected(item);
     }
 

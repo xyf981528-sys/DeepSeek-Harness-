@@ -321,8 +321,8 @@ export function apply(ctx, config = {}) {
 
   // 手机来文字时唤醒当前会话的 Agent：DSH 的 agent.followup() 会把消息塞进
   // 下一轮 inbox 并唤醒驱动，效果等同于用户在本会话里发了一句。
+  let liveAgent = null;
   ctx.effect(() => {
-    let liveAgent = null;
     const hasFollowup = (agent) => Boolean(agent) && typeof agent.followup === 'function';
     const offCreated = ctx.on('agent/created', ({ agent }) => {
       if (hasFollowup(agent)) liveAgent = agent;
@@ -370,6 +370,48 @@ export function apply(ctx, config = {}) {
       try { offDisposed(); } catch { /* ignore */ }
       station.setAgentNotifier(null);
     };
+  });
+
+  // 实时输出（只读）：把当前会话的助手文本、工具调用记到环形缓冲，手机轮询 /live。
+  const liveEntries = [];
+  station.liveEntries = liveEntries;
+  ctx.effect(() => {
+    let seq = 0;
+    const off = ctx.on('session/event', (subject, event) => {
+      try {
+        if (!event || !event.type) return;
+        const type = event.type;
+        const entry = { seq: ++seq, type, at: Date.now() };
+        if (type === 'assistant/message') {
+          const msg = event.data && event.data.message;
+          const text = (msg && Array.isArray(msg.content) ? msg.content.filter((c) => c && c.type === 'text').map((c) => c.text || '').join('') : '');
+          if (!text.trim()) return;
+          entry.text = text.slice(0, 2000);
+        } else if (type === 'tool/call') {
+          entry.text = String(event.data && event.data.name || '工具') + ' ' + String(event.data && event.data.arguments || '').slice(0, 300);
+        } else if (type === 'tool/result') {
+          const m = event.data && event.data.message;
+          entry.text = String(m && m.content ? JSON.stringify(m.content).slice(0, 300) : '工具返回');
+        } else if (type === 'turn/end') {
+          entry.text = '本轮结束';
+        } else {
+          return;
+        }
+        liveEntries.push(entry);
+        if (liveEntries.length > 200) liveEntries.splice(0, liveEntries.length - 200);
+        if (type === 'turn/end') {
+          const sid = liveAgent && liveAgent.session && liveAgent.session.id;
+          const subjectId = subject && (subject.id || (subject.session && subject.session.id));
+          if (!sid || !subjectId || sid === subjectId) {
+            try {
+              const at = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+              station.inboxAppend('✅ 任务已完成（' + at + '）', false, { from: 'pc', kind: 'msg' });
+            } catch { /* ignore */ }
+          }
+        }
+      } catch { /* ignore */ }
+    });
+    return () => { try { off(); } catch { /* ignore */ } };
   });
 
   ctx.effect(() => {
@@ -1509,6 +1551,12 @@ class FileStation {
       }
       if (req.method === 'GET' && route === '/state') {
         return this.safeJson(res, 200, { ok: true, queue: this.queueTail(50) });
+      }
+      if (req.method === 'GET' && route === '/live') {
+        const after = Number(url.searchParams.get('after') || 0) || 0;
+        const all = Array.isArray(this.liveEntries) ? this.liveEntries : [];
+        const items = all.filter((e) => e.seq > after).slice(-100);
+        return this.safeJson(res, 200, { ok: true, items, last: all.length ? all[all.length - 1].seq : 0 });
       }
       if (req.method === 'GET' && route === '/inbox') {
         return this.safeJson(res, 200, { ok: true, items: this.inboxList(30) });

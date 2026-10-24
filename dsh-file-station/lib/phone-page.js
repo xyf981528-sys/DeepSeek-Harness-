@@ -74,6 +74,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   progress::-moz-progress-bar{background:#4c8dff}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px}
   .list{margin-top:10px;display:flex;flex-direction:column;gap:3px}
+  .live{padding:8px 10px;border-radius:10px;background:rgba(20,26,34,.6);border:1px solid rgba(255,255,255,.06);
+        font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:0 0 6px;max-height:160px;overflow:auto}
+  .live .lt{color:#7f8b9c;font-size:11px;margin-bottom:2px}
   .item{display:flex;gap:9px;align-items:center;padding:9px 8px;border-radius:11px;overflow:hidden;
         text-decoration:none;color:inherit;transition:background .12s}
   .item:active{background:#1b2430}
@@ -147,6 +150,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     <label class="opt"><input type="checkbox" id="c-save"> 同时存成 txt 文件（可选，默认不存）</label>
     <label class="opt"><input type="checkbox" id="c-notify"> 让电脑弹窗提醒（可选）</label>
     <div class="row" style="margin-top:10px"><button class="primary" id="b-txt">发送</button><span class="muted" id="s-txt"></span></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="ico">🖥</span>实时输出</h2>
+    <div class="list" id="l-live"></div>
+    <div class="muted tinytip">每 2 秒刷新，只读：当前会话最近的助手文本与工具调用。</div>
   </div>
 
   <div class="card">
@@ -437,6 +446,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   // ---- 对话（文字 / 留言，双向） ----
   // 默认只进对话流，不落文件；勾选「存成 txt」才额外写文件，勾选「弹窗提醒」让电脑响铃弹窗。
   var chat = [];
+  var lastDoneT = '';
   function renderChat() {
     var box = $('l-chat');
     if (!box) return;
@@ -470,12 +480,49 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   function loadChat() {
     return fetch('/inbox' + qs()).then(function (r) { return r.json(); }).then(function (r) {
       if (r && r.ok && r.items) {
+        var done = null;
+        for (var k = 0; k < r.items.length; k++) {
+          var it = r.items[k];
+          if (it && it.from === 'pc' && String(it.text || '').indexOf('✅ 任务已完成') === 0) { done = it; break; }
+        }
+        if (done && done.t !== lastDoneT) {
+          lastDoneT = done.t;
+          toast('✅ 任务已完成', 'ok');
+          try { if (navigator.vibrate) navigator.vibrate(200); } catch (e) {}
+        }
         // 接口返回新→旧，这里转成旧→新
         chat = r.items.slice().reverse();
         renderChat();
       }
     }).catch(function () {});
   }
+
+  var liveSeq = 0;
+  function loadLive() {
+    return fetch('/live?after=' + liveSeq).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r || !r.ok || !Array.isArray(r.items)) return;
+      var box = $('l-live');
+      if (!box) return;
+      r.items.forEach(function (it) {
+        liveSeq = Math.max(liveSeq, it.seq || 0);
+        var d = document.createElement('div');
+        d.className = 'live';
+        var h = document.createElement('div');
+        h.className = 'lt';
+        var label = it.type === 'assistant/message' ? '助手' : it.type === 'tool/call' ? '工具' : it.type === 'tool/result' ? '结果' : '系统';
+        h.textContent = label + ' · ' + new Date(it.at || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+        var b = document.createElement('div');
+        b.textContent = it.text || '';
+        d.appendChild(h);
+        d.appendChild(b);
+        box.appendChild(d);
+        if (box.children.length > 40) box.removeChild(box.firstChild);
+      });
+      if (box.lastChild) box.scrollTop = box.scrollHeight;
+    }).catch(function () {});
+  }
+  loadLive();
+  setInterval(loadLive, 2000);
   $('b-txt').onclick = function () {
     var text = $('t-send').value;
     if (!text.trim()) { set('s-txt', '内容为空', 'err'); return; }
