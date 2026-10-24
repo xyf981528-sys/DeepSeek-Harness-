@@ -119,6 +119,13 @@ python scripts/make-cert.py
 - 取消采用「墓碑标记」（`_chunks/_aborted/<uploadId>`），避免 abort 之后在途分片把目录重新建回来。
 - 安全不变：仍走令牌鉴权、Origin 校验、`safeName` 文件名过滤、磁盘余量检查与 8 GB 上限。
 
+## 图片压缩 / 毛玻璃 / IPv6（v0.3.0）
+
+- **图片压缩**：上传卡片里勾选「上传前压缩图片」（默认勾选）。图片大于 300 KB 时用 `createImageBitmap` + canvas 压到长边 1600、JPEG 0.9，文件名改成 `.jpg`；GIF/SVG/解码失败原样上传。压缩后通常只剩原图的 1/5～1/10，原图不会另存。
+- **毛玻璃 UI**：卡片改成半透明 + `backdrop-filter: blur(18px) saturate(1.35)`，背景加了两团低透明度光晕；不支持 `backdrop-filter` 的浏览器自动回退为实色卡片。
+- **IPv6 双栈**：HTTP 与 HTTPS 监听都先绑 `::`（Windows 上同时接受 IPv4），系统不支持时回退 `0.0.0.0`。IPv4 地址不变，局域网里 IPv6-only 的设备也能连。
+  - HTTPS 证书目前只签了当前 IPv4/IPv6 回环，**通过 IPv6 访问建议用 HTTP**；要 HTTPS over IPv6，重跑 `scripts/make-cert.py` 时把 IPv6 地址作为参数传进去。
+
 ## 数据位置
 
 默认是**插件目录下的 `data`**，即 `D:\DeepSeek Y\dsh-file-station\data`（跟随插件所在盘，不再写 C 盘）。

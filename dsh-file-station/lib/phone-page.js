@@ -26,21 +26,30 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   html{-webkit-text-size-adjust:100%}
   body{margin:0;padding:0 12px calc(26px + env(safe-area-inset-bottom));color:var(--text);
        font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
-       background:radial-gradient(1200px 560px at 50% -200px,#17253c 0%,rgba(10,14,19,0) 65%),#0a0e13;
+       background:
+         radial-gradient(900px 420px at 12% -8%,rgba(76,141,255,.18) 0%,rgba(10,14,19,0) 60%),
+         radial-gradient(800px 420px at 92% 8%,rgba(124,92,255,.12) 0%,rgba(10,14,19,0) 62%),
+         radial-gradient(1200px 560px at 50% -200px,#17253c 0%,rgba(10,14,19,0) 65%),#0a0e13;
        background-attachment:fixed}
   .wrap{max-width:680px;margin:0 auto}
   .top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
        padding:calc(10px + env(safe-area-inset-top)) 2px 10px;
-       background:linear-gradient(180deg,#0a0e13 62%,rgba(10,14,19,.72));
-       backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+       background:linear-gradient(180deg,rgba(10,14,19,.86) 62%,rgba(10,14,19,.55));
+       backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3)}
   .logo{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:17px;
         background:linear-gradient(150deg,#2a5bd7,#4c8dff);box-shadow:0 6px 18px rgba(76,141,255,.35)}
   .top h1{flex:1;margin:0;font-size:17px;font-weight:650;letter-spacing:.01em}
   .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#c7daff;white-space:nowrap;
         background:rgba(76,141,255,.12);border:1px solid rgba(76,141,255,.32);padding:4px 9px;border-radius:999px}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(70,209,127,.15)}
-  .card{background:linear-gradient(180deg,var(--card),var(--card2));border:1px solid var(--line);
-        border-radius:16px;padding:14px;margin:0 0 12px;box-shadow:0 10px 26px rgba(0,0,0,.26)}
+  .card{background:linear-gradient(180deg,rgba(20,26,34,.74),rgba(24,32,41,.58));
+        border:1px solid rgba(255,255,255,.075);
+        border-radius:16px;padding:14px;margin:0 0 12px;
+        box-shadow:0 12px 34px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.045);
+        backdrop-filter:blur(18px) saturate(1.35);-webkit-backdrop-filter:blur(18px) saturate(1.35)}
+  @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+    .card{background:linear-gradient(180deg,var(--card),var(--card2))}
+  }
   .card h2{display:flex;align-items:center;gap:9px;font-size:14.5px;font-weight:640;margin:0 0 11px}
   .card h2 .ico{width:27px;height:27px;border-radius:9px;display:grid;place-items:center;font-size:14px;
         background:rgba(76,141,255,.13);border:1px solid rgba(76,141,255,.24)}
@@ -124,6 +133,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   <div class="card">
     <h2><span class="ico">⬆</span>上传文件到电脑</h2>
     <input type="file" id="f-up" multiple>
+    <label class="opt"><input type="checkbox" id="c-compress" checked> 上传前压缩图片（长边 1600，转为 JPEG）</label>
     <div class="row" style="margin-top:10px"><button class="primary" id="b-up">开始上传</button><button id="b-cancel" style="display:none">取消</button><span class="muted" id="s-up"></span></div>
     <progress id="p-up" value="0" max="100" style="display:none"></progress>
     <div class="muted tinytip">大文件自动分片（1 MB/片），断网后重新选同一个文件会从断点继续。</div>
@@ -330,6 +340,33 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     });
   }
 
+  /** 拍照/相册图片上传前压到长边 1600、JPEG 0.9；GIF/SVG/解码失败时原样返回。 */
+  function compressImage(f) {
+    if (!/^image\\//i.test(f.type)) return Promise.resolve(f);
+    if (/image\\/(gif|svg\\+xml)/i.test(f.type)) return Promise.resolve(f);
+    if (f.size < 300 * 1024) return Promise.resolve(f);
+    if (typeof createImageBitmap !== 'function') return Promise.resolve(f);
+    return createImageBitmap(f).then(function (bmp) {
+      var max = 1600;
+      var scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      if (scale >= 1 && f.size < 2 * 1024 * 1024) { if (bmp.close) bmp.close(); return f; }
+      var w = Math.max(1, Math.round(bmp.width * scale));
+      var h = Math.max(1, Math.round(bmp.height * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      return new Promise(function (resolve) {
+        canvas.toBlob(function (blob) {
+          if (!blob || blob.size >= f.size) return resolve(f);
+          var name = f.name.replace(/\\.[^.]+$/, '') + '.jpg';
+          try { resolve(new File([blob], name, { type: 'image/jpeg', lastModified: f.lastModified })); }
+          catch (e) { resolve(f); }
+        }, 'image/jpeg', 0.9);
+      });
+    }).catch(function () { return f; });
+  }
+
   $('b-up').onclick = function () {
     var files = Array.prototype.slice.call($('f-up').files || []);
     if (!files.length) { set('s-up', '先选文件', 'err'); return; }
@@ -365,14 +402,19 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
         bar.value = p;
         set('s-up', label + ' ' + p + '%');
       };
-      var job = f.size > CHUNK_MIN
-        ? uploadChunked(f, function (done) { pct(done / Math.max(1, Math.ceil(f.size / CHUNK_BYTES))); })
-        : uploadSingle(f, pct);
-      job.then(function () {
-        totalMB += f.size / 1048576;
-        i++;
-        toast('✅ ' + f.name + ' 已传完', 'ok');
-        next();
+      var prep = ($('c-compress') && $('c-compress').checked) ? compressImage(f) : Promise.resolve(f);
+      prep.then(function (u) {
+        if (u !== f) label += ' → ' + u.name + '（' + (u.size / 1048576).toFixed(1) + ' MB）';
+        set('s-up', label);
+        var job = u.size > CHUNK_MIN
+          ? uploadChunked(u, function (done) { pct(done / Math.max(1, Math.ceil(u.size / CHUNK_BYTES))); })
+          : uploadSingle(u, pct);
+        return job.then(function () {
+          totalMB += u.size / 1048576;
+          i++;
+          toast('✅ ' + u.name + ' 已传完', 'ok');
+          next();
+        });
       }).catch(function (err) {
         if (upState && upState.cancel) set('s-up', '已取消', 'err');
         else { set('s-up', f.name + ' 上传失败：' + (err && err.message || err), 'err'); toast('❌ ' + f.name + ' 上传失败', 'err'); }

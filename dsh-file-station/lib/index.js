@@ -330,7 +330,10 @@ class FileStation {
     server.maxConnections = 64;
 
     let port = this.portPref;
+    let hostIdx = 0;
+    const hosts = ['::', '0.0.0.0'];
     const attempt = () => {
+      const host = hosts[hostIdx];
       const onListening = () => {
         server.removeListener('listening', onListening);
         server.removeListener('error', onError);
@@ -339,21 +342,27 @@ class FileStation {
         this.startedAt = Date.now();
         this.lastUpload = null;
         this.reveal = null;
-        this.log('=== 启动 === port=' + port + ' lan=' + this.lanUrl());
+        this.log('=== 启动 === host=' + host + ' port=' + port + ' lan=' + this.lanUrl());
         setImmediate(() => this.startHttps());
       };
       const onError = (err) => {
         server.removeListener('error', onError);
         server.removeListener('listening', onListening);
+        if (err && (err.code === 'EADDRNOTAVAIL' || err.code === 'EAFNOSUPPORT') && hostIdx < hosts.length - 1) {
+          hostIdx += 1;
+          setImmediate(attempt);
+          return;
+        }
         if (err && err.code === 'EADDRINUSE' && port - this.portPref < PORT_TRIES) {
           port += 1;
+          hostIdx = 0;
           setImmediate(attempt);
           return;
         }
         this.log('START-ERR: ' + String(err && err.message || err));
       };
       server.once('error', onError);
-      server.listen(port, '0.0.0.0', onListening);
+      server.listen(port, host, onListening);
     };
     attempt();
   }
@@ -386,26 +395,35 @@ class FileStation {
 
     const base = this.port || this.portPref;
     let port = base + 1;
+    let hostIdx = 0;
+    const hosts = ['::', '0.0.0.0'];
     const attempt = () => {
+      const host = hosts[hostIdx];
       const onListening = () => {
         server.removeListener('listening', onListening);
         server.removeListener('error', onError);
         this.httpsServer = server;
         this.httpsPort = port;
-        this.log('=== HTTPS === port=' + port + ' url=' + this.lanUrl());
+        this.log('=== HTTPS === host=' + host + ' port=' + port + ' url=' + this.lanUrl());
       };
       const onError = (err) => {
         server.removeListener('error', onError);
         server.removeListener('listening', onListening);
+        if (err && (err.code === 'EADDRNOTAVAIL' || err.code === 'EAFNOSUPPORT') && hostIdx < hosts.length - 1) {
+          hostIdx += 1;
+          setImmediate(attempt);
+          return;
+        }
         if (err && err.code === 'EADDRINUSE' && port - base < 40) {
           port += 1;
+          hostIdx = 0;
           setImmediate(attempt);
           return;
         }
         this.log('HTTPS-ERR: ' + String(err && err.message || err));
       };
       server.once('error', onError);
-      server.listen(port, '0.0.0.0', onListening);
+      server.listen(port, host, onListening);
     };
     attempt();
   }
