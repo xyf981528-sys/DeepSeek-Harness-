@@ -166,6 +166,184 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   @keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){ *{transition:none!important;animation:none!important;scroll-behavior:auto!important} }
 </style>
+<style>
+  /* ---- 外观增强（后加载，覆盖上面的基础样式） ---- */
+  :root{
+    --bg:#05080e; --panel:#0a111a; --card:#111b27; --card2:#172334;
+    --line:rgba(148,163,184,.14); --line2:rgba(148,163,184,.24);
+    --text:#edf3fb; --muted:#8b9bb0; --brand:#5b9dff; --brand2:#3d7cf0;
+    --ok:#3ddc97; --err:#ff7b7b;
+  }
+  body{
+    background:
+      radial-gradient(1000px 520px at 8% -12%,rgba(91,157,255,.22),transparent 62%),
+      radial-gradient(800px 480px at 104% 2%,rgba(139,92,246,.16),transparent 60%),
+      radial-gradient(600px 400px at 50% 110%,rgba(56,189,248,.06),transparent 65%),
+      linear-gradient(180deg,#080d15 0%,#05080e 58%,#04070c 100%);
+    background-attachment:fixed;
+  }
+  .chat-scroll::-webkit-scrollbar,.drawer-body::-webkit-scrollbar,.attachbar::-webkit-scrollbar{width:0;height:0}
+  .top{
+    padding:calc(12px + env(safe-area-inset-top)) 16px 12px;
+    background:linear-gradient(180deg,rgba(8,13,20,.94),rgba(8,13,20,.58));
+    border-bottom:1px solid rgba(255,255,255,.05);
+    backdrop-filter:blur(22px) saturate(1.25);-webkit-backdrop-filter:blur(22px) saturate(1.25);
+  }
+  .logo{
+    width:38px;height:38px;border-radius:13px;font-size:18px;
+    background:linear-gradient(145deg,#6db2ff 0%,#3d7cf0 55%,#2d5fc9 100%);
+    box-shadow:0 8px 22px rgba(61,124,240,.35),inset 0 1px 0 rgba(255,255,255,.35);
+    border:1px solid rgba(255,255,255,.16);
+  }
+  .brand h1{font-size:17px;font-weight:700;letter-spacing:.015em}
+  .brand small{font-size:11px;letter-spacing:.02em;margin-top:2px}
+  .dot{
+    width:6px;height:6px;background:var(--ok);
+    box-shadow:0 0 0 3px rgba(61,220,151,.14),0 0 10px rgba(61,220,151,.65);
+    animation:pulseDot 2.2s ease-in-out infinite;
+  }
+  @keyframes pulseDot{0%,100%{opacity:1}50%{opacity:.55}}
+  .task-btn{
+    border:1px solid rgba(91,157,255,.34);background:rgba(91,157,255,.13);color:#cfe1ff;
+    padding:7px 12px;font-size:12px;font-weight:600;box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  .task-strip{
+    background:linear-gradient(180deg,rgba(13,21,32,.96),rgba(10,17,26,.92));
+    border-bottom:1px solid var(--line);color:#c9d8ea;line-height:1.6;
+  }
+  .chat-scroll{padding:16px 14px 10px}
+  .chat-list{gap:8px}
+  .empty{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    margin:auto;padding:28px 20px;text-align:center;color:var(--muted);line-height:1.6;
+  }
+  .empty .e-icon{
+    width:64px;height:64px;border-radius:22px;display:grid;place-items:center;font-size:30px;
+    background:linear-gradient(145deg,rgba(91,157,255,.22),rgba(139,92,246,.16));
+    border:1px solid rgba(91,157,255,.28);box-shadow:0 12px 30px rgba(20,40,80,.45);
+    margin-bottom:14px;
+  }
+  .empty .e-title{font-size:16px;font-weight:650;color:#dbe7f6;margin-bottom:5px}
+  .empty .e-sub{font-size:12.5px;color:#7f91a8;max-width:260px}
+  .empty .e-chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}
+  .empty .e-chip{
+    border:1px solid rgba(148,163,184,.18);background:rgba(23,35,50,.7);color:#aebfd2;
+    border-radius:999px;padding:7px 12px;font-size:12px;min-height:0;
+  }
+  .time-sep{
+    color:#6b7d92;background:rgba(148,163,184,.08);border:1px solid rgba(148,163,184,.08);
+    font-size:10.5px;letter-spacing:.03em;
+  }
+  .msg{animation:msgIn .18s ease-out both}
+  @keyframes msgIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .bubble{
+    border-radius:17px;padding:10px 13px;border:1px solid rgba(148,163,184,.13);
+    background:linear-gradient(180deg,rgba(24,36,52,.94),rgba(16,25,38,.96));
+    box-shadow:0 6px 20px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.04);
+    font-size:14.5px;
+  }
+  .msg.me .bubble{
+    background:linear-gradient(140deg,#4f8fff 0%,#3d7cf0 58%,#2f64cc 100%);
+    border-color:rgba(120,175,255,.55);border-bottom-right-radius:6px;
+    box-shadow:0 8px 24px rgba(45,95,200,.32),inset 0 1px 0 rgba(255,255,255,.22);
+  }
+  .msg.pc .bubble{border-bottom-left-radius:6px}
+  .bubble .meta{font-size:10px;opacity:.6;letter-spacing:.02em;margin-bottom:3px}
+  .bubble .copyhint{opacity:.46}
+  .bubble img{border-radius:13px;box-shadow:0 4px 14px rgba(0,0,0,.22)}
+  .attachbar{
+    background:linear-gradient(180deg,rgba(14,23,34,.98),rgba(10,17,26,.98));
+    border-top:1px solid var(--line);padding:10px 14px;
+  }
+  .att .thumb,.att .fileicon{border-radius:12px;border-color:rgba(148,163,184,.18);box-shadow:0 4px 12px rgba(0,0,0,.22)}
+  .att .x{background:rgba(10,16,24,.9);border-color:rgba(148,163,184,.3);backdrop-filter:blur(6px)}
+  .progress-wrap{background:rgba(10,17,26,.98)}
+  .composer{
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    background:linear-gradient(180deg,rgba(10,16,24,.96),rgba(7,12,19,.99));
+    border-top:1px solid rgba(148,163,184,.12);
+    box-shadow:0 -12px 30px rgba(0,0,0,.22);
+  }
+  .plus{
+    width:42px;height:42px;border-radius:50%;border:1px solid rgba(148,163,184,.22);
+    background:linear-gradient(160deg,#1b2a3d,#121d2b);color:#bcd2ea;font-weight:300;
+    box-shadow:0 4px 12px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  .plus:active{transform:scale(.94)}
+  .inputwrap{
+    background:rgba(19,30,44,.92);border:1px solid rgba(148,163,184,.16);
+    border-radius:22px;padding:6px 13px;transition:border-color .18s,box-shadow .18s;
+  }
+  .inputwrap:focus-within{
+    border-color:rgba(91,157,255,.7);
+    box-shadow:0 0 0 3px rgba(91,157,255,.12),inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  textarea::placeholder{color:#6f8096}
+  .send{
+    height:42px;border-radius:22px;padding:0 17px;font-size:13.5px;letter-spacing:.02em;
+    border:1px solid rgba(130,180,255,.5);
+    background:linear-gradient(180deg,#6ba8ff,#3d7cf0 62%,#2f66d4);
+    box-shadow:0 6px 18px rgba(45,100,210,.3),inset 0 1px 0 rgba(255,255,255,.28);
+    color:#04101f;
+  }
+  .send:active{transform:translateY(1px) scale(.99)}
+  .sheet{
+    background:linear-gradient(180deg,rgba(16,26,40,.99),rgba(9,15,24,.99));
+    border-top:1px solid rgba(148,163,184,.18);border-radius:24px 24px 0 0;
+    box-shadow:0 -26px 60px rgba(0,0,0,.55);padding-top:12px;
+  }
+  .sheet .grab,.drawer .grab{background:rgba(148,163,184,.35)}
+  .tools{gap:14px 10px}
+  .tool .ti{
+    width:56px;height:56px;border-radius:19px;font-size:25px;
+    background:rgba(23,35,50,.92);border:1px solid rgba(148,163,184,.16);
+    box-shadow:0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .tool:nth-child(1) .ti{background:linear-gradient(150deg,rgba(91,157,255,.26),rgba(61,124,240,.12));border-color:rgba(91,157,255,.34)}
+  .tool:nth-child(2) .ti{background:linear-gradient(150deg,rgba(236,72,153,.22),rgba(190,24,93,.1));border-color:rgba(236,72,153,.3)}
+  .tool:nth-child(3) .ti{background:linear-gradient(150deg,rgba(56,189,248,.22),rgba(14,165,233,.1));border-color:rgba(56,189,248,.3)}
+  .tool:nth-child(4) .ti{background:linear-gradient(150deg,rgba(251,191,36,.22),rgba(245,158,11,.1));border-color:rgba(251,191,36,.3)}
+  .tool span{font-size:12px;color:#b9c9da;font-weight:500}
+  .tool:active .ti{transform:scale(.94)}
+  .sheet .row2{
+    margin-top:16px;padding-top:12px;border-top:1px solid rgba(148,163,184,.12);
+    gap:12px;color:#8d9db1;
+  }
+  .mini{
+    background:rgba(23,35,50,.9);border-color:rgba(148,163,184,.18);color:#c3d2e2;
+    border-radius:10px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .drawer{
+    background:linear-gradient(180deg,rgba(13,21,32,.995),rgba(8,13,21,.998));
+    border-top:1px solid rgba(148,163,184,.2);border-radius:24px 24px 0 0;
+    box-shadow:0 -26px 60px rgba(0,0,0,.58);
+  }
+  .drawer-head{border-bottom:1px solid rgba(148,163,184,.12);padding:8px 16px 10px}
+  .drawer-head strong{font-size:15px;letter-spacing:.01em}
+  .tabs{padding:10px 16px 6px;gap:8px}
+  .tab{
+    border:1px solid rgba(148,163,184,.16);background:rgba(20,31,45,.8);color:#8fa2b8;
+    padding:6px 14px;font-size:12px;font-weight:500;
+  }
+  .tab.on{
+    color:#eaf3ff;border-color:rgba(91,157,255,.55);
+    background:linear-gradient(180deg,rgba(91,157,255,.24),rgba(61,124,240,.14));
+    box-shadow:0 2px 10px rgba(61,124,240,.18);
+  }
+  .drawer-body{padding:4px 14px calc(14px + env(safe-area-inset-bottom))}
+  .item{padding:11px 9px;border-radius:12px}
+  .item:active{background:rgba(91,157,255,.1)}
+  .item .nm{font-size:13.5px;color:#dbe6f3}
+  .item .meta{font-size:10.5px;color:#72849a}
+  .roots button{border-radius:10px}
+  #d-path{background:rgba(91,157,255,.08);border-color:rgba(91,157,255,.18);color:#93a8c0}
+  .toast{
+    background:rgba(15,24,36,.97);border:1px solid rgba(148,163,184,.24);
+    box-shadow:0 12px 30px rgba(0,0,0,.5);font-size:12.5px;backdrop-filter:blur(12px);
+  }
+  .shot-modal{background:rgba(3,6,10,.9);backdrop-filter:blur(10px)}
+  .shot-modal img{border-color:rgba(148,163,184,.24);box-shadow:0 24px 60px rgba(0,0,0,.6)}
+</style>
 </head>
 <body>
 <div class="app">
@@ -358,7 +536,20 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     var list = $('l-chat'); if (!list) return;
     list.textContent = '';
     var d = document.createElement('div'); d.className = 'empty';
-    d.textContent = '还没有对话。\\n在下面发消息、图片或文件给电脑。';
+    var icon = document.createElement('div'); icon.className = 'e-icon'; icon.textContent = '💬';
+    var title = document.createElement('div'); title.className = 'e-title'; title.textContent = '和电脑开始对话';
+    var sub = document.createElement('div'); sub.className = 'e-sub'; sub.textContent = '发消息、图片或文件，电脑端会实时收到；回复也会出现在这里。';
+    var chips = document.createElement('div'); chips.className = 'e-chips';
+    [
+      ['🖼️ 图片', function () { $('f-img').click(); }],
+      ['📎 文件', function () { $('f-up').click(); }],
+      ['📁 共享文件', function () { openDrawer('files'); }],
+    ].forEach(function (it) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'e-chip'; b.textContent = it[0]; b.onclick = it[1];
+      chips.appendChild(b);
+    });
+    d.appendChild(icon); d.appendChild(title); d.appendChild(sub); d.appendChild(chips);
     list.appendChild(d);
   }
   function loadChat() {

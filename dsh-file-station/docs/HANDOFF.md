@@ -120,6 +120,15 @@
 - `/download` 链接和 `DownloadListener` 都走内置下载，不再跳浏览器。
 - `versionCode=4`、`versionName=1.3`，已签名，产物在 `android/dist/filestation.apk` 与共享目录。
 
+## UI 优化 + APK 1.4（2026-10-25 10:45）
+
+- 手机页新增一层外观覆盖样式：深色环境光、玻璃气泡、彩色工具图标、空状态引导卡片、输入框聚焦环、抽屉/标签/按钮统一质感。
+- 空状态改为图标 + 标题 + 三个快捷入口（图片/文件/共享文件）。
+- APK 改为 `Theme.Material.NoActionBar`，隐藏原生标题栏；加载状态条完成后自动隐藏，仅错误时显示。
+- 修复「用 HTTP 打开」在已是 HTTP 地址时误报 `地址里没有 19791`：现在直接重载并提示。
+- `versionCode=5`、`versionName=1.4`，已签名，复制到共享目录。
+
+
 
 
 

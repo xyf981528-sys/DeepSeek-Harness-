@@ -17,6 +17,7 @@ import android.provider.MediaStore;
 import android.text.InputType;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JsResult;
@@ -68,14 +69,15 @@ public class MainActivity extends Activity {
         status.setPadding(28, 18, 28, 18);
         status.setTextColor(0xFF9FB3C8);
         status.setBackgroundColor(0xFF0A0E13);
-        status.setText("正在启动…");
+        status.setText("正在连接…");
         root.addView(status, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         web = new WebView(this);
         web.setBackgroundColor(0xFF0A0E13);
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
-        if (getActionBar() != null) getActionBar().setTitle("文件传输台");
+        getWindow().setStatusBarColor(0xFF05080E);
+        getWindow().setNavigationBarColor(0xFF05080E);
 
         if (Build.VERSION.SDK_INT < 29
                 && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -121,17 +123,19 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                status.setText("正在加载 " + url);
+                status.setVisibility(View.VISIBLE);
+                status.setText("正在加载…");
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (status.getText().toString().startsWith("正在加载")) status.setText("已加载 " + url);
+                if (status.getText().toString().startsWith("正在加载")) status.setVisibility(View.GONE);
             }
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
+                    status.setVisibility(View.VISIBLE);
                     status.setText("加载失败：" + error.getDescription() + "\n" + request.getUrl());
                 }
             }
@@ -344,10 +348,15 @@ public class MainActivity extends Activity {
 
     private void openHttpVersion() {
         String u = web.getUrl();
-        if (u == null) u = prefs.getString("url", "");
-        String v = u.replaceFirst("^https://", "http://").replace(":19791", ":19790");
-        if (v.equals(u) || v.isEmpty()) {
-            status.setText("地址里没有 19791，请检查端口后重新设置");
+        if (u == null || u.isEmpty()) u = prefs.getString("url", "");
+        if (u == null || u.isEmpty()) { promptUrl(); return; }
+        String v = u;
+        if (v.startsWith("https://")) v = v.replaceFirst("^https://", "http://");
+        v = v.replace(":19791", ":19790");
+        if (v.equals(u)) {
+            status.setVisibility(View.GONE);
+            web.reload();
+            Toast.makeText(this, "当前已经是 HTTP 地址", Toast.LENGTH_SHORT).show();
             return;
         }
         prefs.edit().putString("url", v).apply();
