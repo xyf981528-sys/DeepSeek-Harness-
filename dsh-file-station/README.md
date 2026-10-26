@@ -21,7 +21,7 @@ dsh plugin --profile desktop add "git+https://github.com/xyf981528-sys/DeepSeek-
 或本地安装：
 
 ```powershell
-dsh plugin --profile desktop add "D:\DeepSeek Y\dsh-file-station"
+dsh plugin --profile desktop add "D:\path\to\dsh-file-station"
 ```
 
 2. 重启 DSH。
@@ -43,7 +43,7 @@ http://<电脑IP>:19790/?k=<访问码>
 源码在 `android/`，构建：
 
 ```powershell
-D:\DeepSeek Y\dsh-file-station\android\build.ps1
+"<插件目录>\android\build.ps1"
 ```
 
 产物：`android/dist/filestation.apk`。APK 自带聊天优先页面与内置下载器。
