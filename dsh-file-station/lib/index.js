@@ -443,6 +443,16 @@ export function apply(ctx, config = {}) {
     }));
     disposers.push(ctx.webServer.register({
       kind: 'exact',
+      path: '/file-station/api/chat-image',
+      handler: (req, res) => station.handleGui(req, res, 'chat-image'),
+    }));
+    disposers.push(ctx.webServer.register({
+      kind: 'exact',
+      path: '/file-station/api/send-image',
+      handler: (req, res) => station.handleGui(req, res, 'send-image'),
+    }));
+    disposers.push(ctx.webServer.register({
+      kind: 'exact',
       path: '/file-station/api/shot.png',
       handler: (req, res) => station.handleGui(req, res, 'shot-image'),
     }));
@@ -1357,6 +1367,23 @@ class FileStation {
     return entry;
   }
 
+  /** 电脑发图给手机：只写 inbox，不唤醒 Agent。 */
+  pcImageSaved(filePath, size, caption, mime) {
+    const rel = path.relative(this.dataDir, filePath).split(path.sep).join('/');
+    const name = path.basename(filePath);
+    const ext = path.extname(name).toLowerCase();
+    const type = mime || (ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg');
+    const text = caption && caption.trim() ? caption.trim().slice(0, 2000) : '🖼️ 电脑图片';
+    const entry = this.inboxAppend(text, false, {
+      from: 'pc',
+      kind: 'image',
+      image: { path: rel, name, size, mime: type },
+    });
+    this.log('电脑图片 -> 手机 ' + name + ' (' + size + ' B)');
+    return entry;
+  }
+
+
   /** 手机聊天里内联显示对话图片（只允许 上传/对话图片 下的文件）。 */
   serveChatImage(req, res, url) {
     const rel = String(url.searchParams.get('path') || '');
@@ -2241,6 +2268,30 @@ class FileStation {
     return this.safeJson(res, 200, { ok: true, saved: true, t: entry.t, name: path.basename(target), bytes: bytes.length });
   }
 
+  async handlePcImage(req, res) {
+    if (req.method !== 'POST') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
+    const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const extMap = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' };
+    const ext = extMap[type];
+    if (!ext) return this.safeJson(res, 415, { ok: false, error: '只支持 JPG/PNG/WebP/GIF 图片' });
+    const limit = 20 * 1024 * 1024;
+    let body;
+    try { body = await this.readBody(req, limit); } catch { return this.safeJson(res, 413, { ok: false, error: '图片超过 20MB' }); }
+    if (!body || !body.length) return this.safeJson(res, 400, { ok: false, error: '图片为空' });
+    let caption = '';
+    try { caption = decodeURIComponent(String(req.headers['x-caption'] || '')); } catch { caption = ''; }
+    let name = '';
+    try { name = decodeURIComponent(String(req.headers['x-filename'] || '')); } catch { name = ''; }
+    name = this.safeName(name || ('电脑图片-' + Date.now() + ext));
+    if (!path.extname(name)) name += ext;
+    const target = this.uniquePath(path.join(this.chatDir, name));
+    try { fs.writeFileSync(target, body); } catch (err) {
+      return this.safeJson(res, 500, { ok: false, error: '保存失败：' + String(err && err.message || err) });
+    }
+    const entry = this.pcImageSaved(target, body.length, caption, type);
+    return this.safeJson(res, 200, { ok: true, chat: true, name: path.basename(target), size: body.length, t: entry.t });
+  }
+
   async handleShotPost(req, res) {
     try { await this.readBody(req, MAX_QUEUE_BODY); } catch { /* 忽略请求体 */ }
     // 截屏是重操作（起 PowerShell），限制最小间隔，避免被刷
@@ -2311,6 +2362,16 @@ class FileStation {
     });
   }
 
+  saveShotToChat() {
+    let stat;
+    try { stat = fs.statSync(this.shotFile); } catch { return null; }
+    if (!stat.isFile() || !stat.size) return null;
+    const stamp = this.stamp().replace(/[: ]/g, '-');
+    const target = this.uniquePath(path.join(this.chatDir, '电脑截图-' + stamp + '.png'));
+    try { fs.copyFileSync(this.shotFile, target); } catch { return null; }
+    return this.pcImageSaved(target, stat.size, '🖥️ 电脑截图', 'image/png');
+  }
+
   notify(text) {
     try {
       fs.writeFileSync(this.notifyMsg, String(text).slice(0, 2000), 'utf8');
@@ -2379,6 +2440,12 @@ class FileStation {
       res.end(svg);
       return undefined;
     }
+    if (kind === 'chat-image') {
+      let u;
+      try { u = new URL(req.url, 'http://127.0.0.1'); } catch { u = new URL('/raw', 'http://127.0.0.1'); }
+      return this.serveChatImage(req, res, u);
+    }
+    if (kind === 'send-image') return this.handlePcImage(req, res);
     if (kind === 'status') {
       if (req.method !== 'GET') return this.safeJson(res, 405, { ok: false, error: 'method not allowed' });
       return this.safeJson(res, 200, this.statusPayload());
@@ -2518,6 +2585,22 @@ class FileStation {
       case 'clear-inbox': {
         try { fs.writeFileSync(this.inboxFile, '', 'utf8'); } catch { /* ignore */ }
         return this.safeJson(res, 200, { ok: true, status: this.statusPayload() });
+      }
+      case 'send-shot-to-phone': {
+        const entry = this.saveShotToChat();
+        if (!entry) return this.safeJson(res, 200, { ok: false, error: '还没有截图，请先截屏' });
+        return this.safeJson(res, 200, { ok: true, chat: true, t: entry.t, status: this.statusPayload() });
+      }
+      case 'shot-to-phone': {
+        if (Date.now() - (this.lastShotAt || 0) < 3000) {
+          return this.safeJson(res, 429, { ok: false, error: '截屏太频繁，请稍等几秒' });
+        }
+        this.lastShotAt = Date.now();
+        const shot = await this.takeShot();
+        if (!shot || !shot.ok) return this.safeJson(res, 500, { ok: false, error: (shot && shot.error) || '截屏失败' });
+        const entry = this.saveShotToChat();
+        if (!entry) return this.safeJson(res, 500, { ok: false, error: '截图保存失败' });
+        return this.safeJson(res, 200, { ok: true, chat: true, t: entry.t, status: this.statusPayload() });
       }
       case 'send-to-phone': {
         const text = String(payload.text || '').trim();

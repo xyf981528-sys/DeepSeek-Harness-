@@ -42,6 +42,12 @@ window.__ModuleLoader__.load({
         shotBusy: '正在截屏…',
         shotDone: '已截屏，可在下方预览',
         shotFail: '截屏失败',
+        sendShotPhone: '截图发手机',
+        sendingShotPhone: '截屏并发送中…',
+        shotSent: '截图已发到手机',
+        sendImage: '发图片到手机',
+        imageSent: '图片已发到手机',
+        imageSendFail: '图片发送失败',
         resetToken: '重置访问码',
         pairDevices: '设备配对',
         resetWarn: '重置后旧地址立即失效，手机上需要重新打开新地址。',
@@ -123,6 +129,12 @@ window.__ModuleLoader__.load({
         shotBusy: 'Capturing…',
         shotDone: 'Screenshot captured',
         shotFail: 'Screenshot failed',
+        sendShotPhone: 'Screenshot to phone',
+        sendingShotPhone: 'Capturing and sending…',
+        shotSent: 'Screenshot sent to phone',
+        sendImage: 'Send image to phone',
+        imageSent: 'Image sent to phone',
+        imageSendFail: 'Failed to send image',
         resetToken: 'Reset access code',
         pairDevices: 'Pair devices',
         resetWarn: 'The old address stops working immediately.',
@@ -287,6 +299,8 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary); }
 .fs-shot { display: block; width: 100%; margin-top: 12px; border-radius: 10px;
   border: 1px solid var(--dsw-alias-border-l1); }
+.fs-bubble-img { display: block; max-width: 100%; max-height: 220px; margin-top: 6px;
+  border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); }
 .fs-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px;
   color: var(--dsw-alias-label-secondary); margin-top: 12px; }
 .fs-meta code { font-family: ui-monospace, Consolas, monospace; color: var(--dsw-alias-label-primary); }
@@ -529,6 +543,7 @@ window.__ModuleLoader__.load({
             else if (action === 'clear-queue') say(t('cleared'));
             else if (action === 'clear-inbox') say(t('inboxCleared'));
             else if (action === 'send-to-phone') say(t('sentToPhone'));
+            else if (action === 'shot-to-phone') say(t('shotSent'));
           } else say((data && data.error) || t('netError'), false);
         } catch {
           say(t('netError'), false);
@@ -538,8 +553,42 @@ window.__ModuleLoader__.load({
         }
       }, [load, say, t]);
 
-      const copy = useCallback(async () => {
-        const text = reveal ? reveal.lanUrl : '';
+      async function sendPcImage(file) {
+        if (!file) return;
+        if (!/^image\//.test(file.type || '')) { say(t('imageSendFail'), false); return; }
+        setBusy('send-image');
+        try {
+          const res = await fetch('/file-station/api/send-image', {
+            method: 'POST',
+            headers: {
+              'Content-Type': file.type || 'image/png',
+              'X-Filename': encodeURIComponent(file.name || 'image.png'),
+            },
+            body: file,
+          });
+          const data = await res.json();
+          if (data && data.ok) say(t('imageSent'));
+          else say((data && data.error) || t('imageSendFail'), false);
+        } catch {
+          say(t('imageSendFail'), false);
+        } finally {
+          setBusy('');
+          load();
+        }
+      }
+
+      function pickPcImage() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = () => {
+          const f = input.files && input.files[0];
+          if (f) sendPcImage(f);
+        };
+        input.click();
+      }
+
+      const copy = useCallback(async () => {        const text = reveal ? reveal.lanUrl : '';
         if (!text) return;
         try {
           await navigator.clipboard.writeText(text);
@@ -769,6 +818,16 @@ window.__ModuleLoader__.load({
                   disabled: busy === 'reset-token',
                 }, t('resetToken')))),
             h('div', { className: 'fs-hint' }, t('freeHint')),
+            h('div', { className: 'fs-actions', style: { marginTop: 10 } },
+              h(Btn, {
+                primary: true,
+                onClick: () => act('shot-to-phone'),
+                disabled: busy === 'shot-to-phone',
+              }, busy === 'shot-to-phone' ? t('sendingShotPhone') : '📤 ' + t('sendShotPhone')),
+              h(Btn, {
+                onClick: pickPcImage,
+                disabled: busy === 'send-image',
+              }, '🖼️ ' + t('sendImage'))),
             status.shotAt ? h('img', {
               className: 'fs-shot',
               src: '/file-station/api/shot.png?t=' + status.shotAt,
@@ -820,7 +879,14 @@ window.__ModuleLoader__.load({
                       + (m.kind === 'msg' ? ' · 💬' : '')),
                     m.saved ? h('span', { className: 'badge' }, t('inboxSaved')) : null,
                     h('button', { type: 'button', className: 'copy', onClick: () => copyText(m.text) }, t('copyMsg'))),
-                  h('div', { className: 'b' }, m.text))))
+                  h('div', { className: 'b' }, m.text),
+                  m.image && m.image.path
+                    ? h('img', {
+                        className: 'fs-bubble-img',
+                        src: '/file-station/api/chat-image?path=' + encodeURIComponent(m.image.path),
+                        alt: m.image.name || 'image',
+                      })
+                    : null)))
               : h('div', { className: 'fs-empty' }, t('inboxEmpty')),
             h('div', { className: 'fs-inputrow', style: { marginTop: 12 } },
               h('input', {
