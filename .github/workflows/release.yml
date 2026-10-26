@@ -1,0 +1,37 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package source
+        run: |
+          cd dsh-file-station
+          zip -qr ../dsh-file-station-source.zip . \
+            -x 'data/*' 'certs/*' '_backup/*' 'android/build/*' '*.idsig'
+
+      - name: Delete old v1.1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete v1.1 --yes --cleanup-tag || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            dsh-file-station/android/dist/filestation.apk \
+            dsh-file-station-source.zip \
+            --title "文件传输台 $TAG" \
+            --notes "dsh-file-station 0.7.4 / Android APK 1.5（versionCode 6）。包含电脑发图片/截图到手机、聊天优先手机页、内置下载器。"
