@@ -25,8 +25,10 @@ window.__ModuleLoader__.load({
         revealShow: '显示连接地址',
         revealHide: '收起',
         revealLocked: '连接地址与二维码已隐藏（含访问码，仅本机可见）',
-        revealExpire: '90 秒后自动收起；收起后二维码立即失效。',
+        revealExpire: '90 秒后自动收起。注意：收起只是隐藏界面，访问码本身不会失效——要真正作废旧地址，请点右边的「重置访问码」。',
         noLan: '没有检测到局域网 IP，请确认电脑已连接 WiFi 或网线。',
+    tsOn: '外网访问（Tailscale）：手机不在同一 WiFi 也能连，流量走 WireGuard 加密。',
+    tsOff: '想让手机在任何网络都能连？电脑和手机都装 Tailscale 并登录同一账号，这里就会出现外网地址。',
         qrTitle: '扫码连接',
         qrHint: '手机相机对准二维码，或微信扫一扫，同一 WiFi 下点开链接即可。',
         qrAlt: '手机访问地址二维码',
@@ -53,6 +55,7 @@ window.__ModuleLoader__.load({
         inboxEmpty: '还没有消息',
         inboxSaved: '已存文件',
         clearInbox: '清空对话',
+    clearInboxWarn: '清空后手机和电脑两侧的对话记录都会消失，且无法恢复。确定吗？',
         inboxCleared: '对话已清空',
         copyMsg: '复制',
         copiedMsg: '已复制',
@@ -103,8 +106,10 @@ window.__ModuleLoader__.load({
         revealShow: 'Show connection',
         revealHide: 'Hide',
         revealLocked: 'Address and QR code hidden (they contain the access code, local eyes only)',
-        revealExpire: 'Auto-hides after 90 seconds; the QR code stops working immediately.',
+        revealExpire: 'Auto-hides after 90 seconds. Hiding only clears the panel — the access code stays valid. Use "Reset access code" to actually revoke it.',
         noLan: 'No LAN IP detected. Make sure this computer is on Wi-Fi or Ethernet.',
+    tsOn: 'Remote access (Tailscale): works when the phone is on another network; traffic is WireGuard-encrypted.',
+    tsOff: 'Want the phone to connect from anywhere? Install Tailscale on both devices with the same account and the remote address shows up here.',
         qrTitle: 'Scan to connect',
         qrHint: 'Point the phone camera at the QR code on the same Wi-Fi, then open the link.',
         qrAlt: 'QR code of the phone address',
@@ -131,6 +136,7 @@ window.__ModuleLoader__.load({
         inboxEmpty: 'No messages yet',
         inboxSaved: 'saved to file',
         clearInbox: 'Clear conversation',
+    clearInboxWarn: 'This clears the conversation on both phone and PC and cannot be undone. Continue?',
         inboxCleared: 'Conversation cleared',
         copyMsg: 'Copy',
         copiedMsg: 'Copied',
@@ -730,6 +736,18 @@ window.__ModuleLoader__.load({
                     h('span', null, t('revealLocked'))),
                 ]),
 
+            // Tailscale 外网访问：手机不在同一 WiFi 时走这条
+            status.tailscale && status.tailscale.up
+              ? h('div', { className: 'fs-ts', style: { marginTop: 10 } },
+                  h('div', { className: 'fs-hint' }, t('tsOn')),
+                  h('div', { className: 'fs-urlrow', style: { marginTop: 6 } },
+                    h('div', { className: 'fs-url' },
+                      h('span', null, reveal && reveal.tailUrl ? reveal.tailUrl : (status.tailscale.urlMasked || '—'))),
+                    reveal && reveal.tailUrl
+                      ? h(Btn, { primary: true, onClick: () => copyText(reveal.tailUrl) }, t('copy'))
+                      : h(Btn, { onClick: showConn, disabled: busy === 'reveal-connection' }, '👁 ' + t('revealShow'))))
+              : h('div', { className: 'fs-hint', style: { marginTop: 10 } }, t('tsOff')),
+
           // 快捷操作
           h('div', { className: 'fs-card' },
             h('div', { className: 'fs-card-head' },
@@ -742,7 +760,14 @@ window.__ModuleLoader__.load({
                   onClick: () => act('shot'),
                   disabled: busy === 'shot',
                 }, busy === 'shot' ? t('shotBusy') : '📷 ' + t('shot')),
-                h(Btn, { danger: true, onClick: () => act('reset-token'), disabled: busy === 'reset-token' }, t('resetToken')))),
+                h(Btn, {
+                  danger: true,
+                  onClick: () => {
+                    if (!window.confirm(t('resetWarn'))) return;
+                    act('reset-token');
+                  },
+                  disabled: busy === 'reset-token',
+                }, t('resetToken')))),
             h('div', { className: 'fs-hint' }, t('freeHint')),
             status.shotAt ? h('img', {
               className: 'fs-shot',
@@ -776,7 +801,14 @@ window.__ModuleLoader__.load({
             h('div', { className: 'fs-card-head' },
               h('div', { className: 'fs-card-title' }, t('inboxTitle') + (inbox.length ? ' (' + inbox.length + ')' : '')),
               inbox.length
-                ? h(Btn, { onClick: () => act('clear-inbox'), danger: true, disabled: busy === 'clear-inbox' }, t('clearInbox'))
+                ? h(Btn, {
+                    onClick: () => {
+                      if (!window.confirm(t('clearInboxWarn'))) return;
+                      act('clear-inbox');
+                    },
+                    danger: true,
+                    disabled: busy === 'clear-inbox',
+                  }, t('clearInbox'))
                 : null),
             h('div', { className: 'fs-hint' }, t('inboxHint')),
             inbox.length

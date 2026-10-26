@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      这台服务器用的是本地自签 CA（certs/ca.crt.pem）。
+      targetSdk 24+ 起，应用默认只信任 system 证书，用户手动安装的 CA 在
+      WebView 里是不生效的 —— 结果就是 HTTPS 必然失败，只能退回明文 HTTP。
+      显式加上 user 来源，装完 CA 后 HTTPS 才真的能用。
+
+      cleartextTrafficPermitted 暂时保留 true：老用户可能还没装 CA，
+      直接关掉会让人连不上。等确认 CA 都装好了再改成 false。
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

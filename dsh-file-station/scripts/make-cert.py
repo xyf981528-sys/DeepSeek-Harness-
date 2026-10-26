@@ -12,6 +12,7 @@ import datetime
 import ipaddress
 import os
 import socket
+import subprocess
 import sys
 
 from cryptography import x509
@@ -38,6 +39,23 @@ def lan_ip():
         return "127.0.0.1"
 
 
+def harden_acl(path):
+    """Windows 上 os.chmod 只切「只读」属性，不改 ACL —— 私钥仍然对本机所有用户可读。
+    用 icacls 去掉继承、只留当前用户。非 Windows 直接返回。"""
+    if os.name != "nt":
+        return
+    user = os.environ.get("USERNAME") or ""
+    if not user:
+        return
+    try:
+        subprocess.run(
+            ["icacls", path, "/inheritance:r", "/grant:r", user + ":F"],
+            capture_output=True, check=False,
+        )
+    except OSError:
+        pass
+
+
 def write_private(path, key):
     with open(path, "wb") as f:
         f.write(key.private_bytes(
@@ -49,6 +67,7 @@ def write_private(path, key):
         os.chmod(path, 0o600)
     except OSError:
         pass
+    harden_acl(path)
 
 
 def load_ca():
@@ -70,7 +89,9 @@ def load_ca():
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(days=3650))
+        # 2 年，不是 10 年：这把 CA 一旦泄露可对任意域名 MITM，且没有吊销机制，
+        # 有效期越短越好。重签 CA 后手机需要重新安装 ca.crt。
+        .not_valid_after(now + datetime.timedelta(days=730))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(x509.KeyUsage(
             digital_signature=True, content_commitment=False, key_encipherment=False,

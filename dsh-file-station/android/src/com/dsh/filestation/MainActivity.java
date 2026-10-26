@@ -7,6 +7,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.net.http.SslError;
@@ -97,7 +98,11 @@ public class MainActivity extends Activity {
         s.setSupportZoom(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setUserAgentString(s.getUserAgentString() + " DSHFileStationApp/1.1");
-        WebView.setWebContentsDebuggingEnabled(true);
+        // 只在可调试包里开 WebView 远程调试：release 包开着等于把 Cookie/访问码
+        // 暴露给任何能连 USB 调试的人（chrome://inspect 可跑任意 JS）
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -359,8 +364,10 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "当前已经是 HTTP 地址", Toast.LENGTH_SHORT).show();
             return;
         }
-        prefs.edit().putString("url", v).apply();
+        // 不把明文地址写进 prefs：一次「改用 HTTP」不应该让以后每次启动都降级。
+        // 下次启动仍按原来保存的地址（通常是 https），需要时再点一次。
         web.loadUrl(v);
+        Toast.makeText(this, "本次仅用 HTTP 打开；下次启动仍会尝试 HTTPS", Toast.LENGTH_LONG).show();
     }
 
     @Override

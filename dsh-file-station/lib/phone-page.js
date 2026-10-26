@@ -152,8 +152,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 
   /* 截屏预览 */
   .shot-modal{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;padding:16px}
-  .shot-modal img{max-width:100%;max-height:88dvh;border-radius:12px;border:1px solid #314357}
+  .shot-modal img{max-width:100%;max-height:76dvh;border-radius:12px;border:1px solid #314357}
   .shot-modal .xbtn{position:absolute;top:14px;right:16px;font-size:26px;color:#fff}
+  .shot-bar{position:absolute;left:0;right:0;bottom:calc(20px + env(safe-area-inset-bottom));display:flex;justify-content:center;gap:12px;padding:0 16px}
+  .shot-bar button{min-height:44px;padding:10px 24px;border:0;border-radius:999px;background:#2563eb;color:#fff;font:inherit;font-weight:600}
 
   .toastwrap{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + env(safe-area-inset-bottom));
        z-index:90;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;
@@ -429,6 +431,9 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
 <div class="shot-modal" id="shot-modal" hidden>
   <button type="button" class="xbtn" id="shot-close">✕</button>
   <img id="img-shot" alt="电脑截屏">
+  <div class="shot-bar">
+    <button type="button" id="shot-save">💾 保存到手机</button>
+  </div>
 </div>
 
 <div class="toastwrap" id="toastwrap"></div>
@@ -569,7 +574,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       var missing = false;
       for (var k in seen) { if (keys.indexOf(k) < 0) { missing = true; break; } }
       if (missing) { chat = []; seen = {}; $('l-chat').textContent = ''; }
-      if (!items.length) { if (!chat.length) renderEmpty(); return; }
+      if (!items.length) {
+        // 电脑端清空了对话：手机这边也要真的清屏，否则旧消息（可能含隐私）一直留着
+        chat = []; seen = {}; $('l-chat').textContent = '';
+        renderEmpty();
+        return;
+      }
       var emptyEl = $('l-chat').querySelector('.empty');
       if (emptyEl) emptyEl.parentNode.removeChild(emptyEl);
       var prevT = '';
@@ -629,14 +639,17 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   function addFiles(files) {
     var arr = Array.prototype.slice.call(files || []);
     if (!arr.length) return;
+    var skipped = 0;
     arr.forEach(function (f) {
-      if (attach.length >= 9) return;
+      if (attach.length >= 9) { skipped++; return; }
       var isImg = String(f.type || '').indexOf('image/') === 0;
       attach.push({ file: f, kind: isImg ? 'image' : 'file', url: isImg ? URL.createObjectURL(f) : '' });
     });
     renderAttach();
     $('f-img').value = ''; $('f-up').value = '';
-    if (attach.length) toast('已添加 ' + attach.length + ' 个附件');
+    if (attach.length) {
+      toast('已添加 ' + (arr.length - skipped) + ' 个附件' + (skipped ? '，' + skipped + ' 个超出 9 个上限' : ''));
+    }
   }
   function removeAttach(i) {
     var a = attach[i]; if (!a) return;
@@ -785,6 +798,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     if (!upState) return;
     upState.cancel = true;
     try { if (upState.xhr) upState.xhr.abort(); } catch (e) {}
+    // 通知后端删掉已上传的分片，并清掉本地断点；
+    // 否则残片会留在 data/_chunks（只在启动时清理），下次选同一文件还会从旧断点继续
+    if (upState.file) upClearResume(upState.file);
+    if (upState.uploadId) postJson('/upload/abort', { uploadId: upState.uploadId });
     toast('正在取消…');
   };
 
@@ -794,6 +811,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     showProgress(label, 0);
     var prep = (toChat && $('c-compress') && $('c-compress').checked) ? compressImage(f) : Promise.resolve(f);
     return prep.then(function (u) {
+      if (upState && upState.cancel) throw new Error('已取消'); // 压缩期间点了取消，别再传
       if (u !== f) label += ' → ' + u.name;
       if (!toChat && u.size > CHUNK_MIN) {
         return uploadChunked(u, function (done) {
@@ -815,6 +833,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       if (!text) { toast('先写点内容', 'err'); return; }
       sendText(text);
       return;
+    }
+    // 只有文件（没有图片）时，文字不会成为图片说明，先单独发一条，
+    // 否则上传完成后输入框被清空、文字从未发出
+    if (text && !imgs.length && files.length) {
+      sendText(text);
+      text = '';
     }
     upState = { cancel: false, xhr: null, uploadId: null, file: null };
     $('b-txt').disabled = true;
@@ -851,7 +875,10 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       toast(canceled ? '已取消' : ('❌ ' + (err && err.message || err)), canceled ? '' : 'err');
     });
   }
+  var sendingText = false;
   function sendText(text) {
+    if (sendingText) return Promise.resolve();
+    sendingText = true;
     var save = !!($('c-save') && $('c-save').checked);
     var notify = !!($('c-notify') && $('c-notify').checked);
     $('b-txt').disabled = true;
@@ -864,7 +891,7 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
       }
       toast(r.error || '发送失败', 'err');
     }).catch(function (e) { toast(String(e), 'err'); })
-      .then(function () { $('b-txt').disabled = false; });
+      .then(function () { $('b-txt').disabled = false; sendingText = false; });
   }
   $('b-txt').onclick = function () {
     closeTools();
@@ -875,6 +902,8 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     this.style.height = Math.min(120, this.scrollHeight) + 'px';
   });
   $('t-send').addEventListener('keydown', function (e) {
+    // isComposing / keyCode 229：中文、日文输入法正在选候选词时按 Enter 不应该发消息
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAll(); }
   });
 
@@ -915,19 +944,41 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
   $('b-clear').onclick = function () {
     if (!confirm('清空手机与电脑之间的全部对话？')) return;
     fetch('/inbox/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-      .then(function () { chat = []; seen = {}; $('l-chat').textContent = ''; renderEmpty(); toast('对话已清空', 'ok'); });
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (r) {
+        if (!r || !r.ok) { toast((r && r.error) || '清空失败', 'err'); return; }
+        chat = []; seen = {}; $('l-chat').textContent = '';
+        renderEmpty(); toast('对话已清空', 'ok');
+      })
+      .catch(function () { toast('清空失败：网络错误', 'err'); });
   };
 
   // ---------- 截屏 ----------
+  var shotDl = '', shotView = '';
+  function saveUrl(url) {
+    if (!url) return;
+    var a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    try { a.click(); } catch (e) {}
+    setTimeout(function () { try { document.body.removeChild(a); } catch (e) {} }, 1500);
+  }
   function doShot() {
     closeTools();
     toast('正在截屏…');
     api('/shot', {}).then(function (r) {
       if (!r.ok) { toast(r.error || '截屏失败', 'err'); return; }
-      $('img-shot').src = '/shot.png' + qs('t=' + Date.now());
+      // 服务端返回签名地址：不带 Cookie 也能取，App 的 DownloadManager 才存得下来
+      shotDl = r.url || ('/shot.png' + qs('t=' + Date.now()));
+      shotView = r.view || shotDl;
+      $('img-shot').src = shotView;
       $('shot-modal').hidden = false;
+      saveUrl(shotDl); // 截完自动存一份；被浏览器拦了就点下面的按钮
     }).catch(function (e) { toast(String(e), 'err'); });
   }
+  $('shot-save').onclick = function () { saveUrl(shotDl); };
   $('shot-close').onclick = function () { $('shot-modal').hidden = true; };
 
   // ---------- 共享抽屉 ----------
@@ -1011,10 +1062,13 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
     }
     return a;
   }
+  var filesSeq = 0;
   function loadFiles(dir) {
     var list = $('l-files'); if (!list) return;
     list.textContent = '';
+    var seq = ++filesSeq;   // 快速点目录时，旧响应回来要丢掉，否则会覆盖新目录
     fetch('/files' + qs('p=' + encodeURIComponent(dir || ''))).then(function (r) { return r.json(); }).then(function (r) {
+      if (seq !== filesSeq) return;
       if (!r.ok) { $('d-path').textContent = r.error || '无法读取目录'; toast(r.error || '无法读取目录', 'err'); return; }
       currentDir = r.p || '';
       $('d-path').textContent = prettyPath(currentDir);
@@ -1052,8 +1106,12 @@ export function renderPhonePage({ title = '手机文件传输台' } = {}) {
         a.onclick = function (ev) {
           ev.preventDefault();
           fetch('/text' + qs('p=' + encodeURIComponent((r.parent ? r.parent + '/' : '') + it.n)))
-            .then(function (x) { return x.text(); })
-            .then(function (txt) { showText(txt, it.n); });
+            .then(function (x) {
+              if (!x.ok) throw new Error(x.status === 401 ? '会话已过期，请重新打开地址' : ('读取失败 HTTP ' + x.status));
+              return x.text();
+            })
+            .then(function (txt) { showText(txt, it.n); })
+            .catch(function (e) { toast(String(e && e.message || e), 'err'); });
         };
         list.appendChild(a);
       });
